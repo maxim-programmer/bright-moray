@@ -1,141 +1,125 @@
 <script setup>
-import { ref } from 'vue'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import {
+  state,
   getCurrentUser,
+  getDormLabel,
+  getUserStats,
   getMyLots,
   getMyBidLots,
+  getMyMaxBid,
+  getMyBidState,
   getPriceText,
+  getStatus,
   getStatusText,
-  changeUsername,
-  changePassword,
+  getBidsCount,
+  formatMoney,
+  formatTimeShort,
   logout
 } from '../store'
 
 const router = useRouter()
-const newUsername = ref('')
-const newPassword = ref('')
-const confirm = ref('')
-const usernameError = ref('')
-const usernameDone = ref('')
-const passwordError = ref('')
-const passwordDone = ref('')
+const user = computed(() => getCurrentUser())
+const stats = computed(() => getUserStats(state.currentUserId))
+const myLots = computed(() => getMyLots())
+const myBidLots = computed(() => getMyBidLots())
 
-function submitUsername() {
-  usernameDone.value = ''
-  usernameError.value = changeUsername(newUsername.value) || ''
-  if (!usernameError.value) {
-    usernameDone.value = 'Никнейм изменён'
-    newUsername.value = ''
-  }
-}
-
-function submitPassword() {
-  passwordDone.value = ''
-  passwordError.value = changePassword(newPassword.value, confirm.value) || ''
-  if (!passwordError.value) {
-    passwordDone.value = 'Пароль изменён'
-    newPassword.value = ''
-    confirm.value = ''
-  }
-}
-
-function exit() {
+async function exit() {
+  await router.push('/')
   logout()
-  router.push('/')
 }
 </script>
 
 <template>
-  <h1>{{ getCurrentUser().username }}</h1>
+  <div v-if="user" class="profile">
+    <section class="profile-card">
+      <div class="avatar">{{ user.name ? user.name[0] : user.username[0] }}</div>
+      <div class="profile-info">
+        <h1>{{ user.name || user.username }}</h1>
+        <div class="profile-meta">
+          <span>@{{ user.username }}</span>
+          <span v-if="user.telegram">Telegram: @{{ user.telegram }}</span>
+          <span>{{ getDormLabel(user.dormId) }}</span>
+        </div>
+      </div>
+      <div class="profile-actions">
+        <router-link to="/settings" class="button small light">Настройки</router-link>
+        <button class="button small danger" @click="exit">Выйти</button>
+      </div>
+      <div class="profile-stats">
+        <div class="stat"><b>{{ stats.rating }}</b><span>рейтинг</span></div>
+        <div class="stat"><b>{{ stats.created }}</b><span>создано лотов</span></div>
+        <div class="stat"><b>{{ stats.participated }}</b><span>участий в торгах</span></div>
+        <div class="stat"><b>{{ stats.won }}</b><span>выиграно</span></div>
+        <div class="stat"><b>{{ stats.complaints }}</b><span>жалоб</span></div>
+      </div>
+    </section>
 
-  <div class="block">
-    <h2>Мои лоты</h2>
-    <div v-if="getMyLots().length === 0" class="muted">
-      У вас пока нет лотов. <router-link to="/create"><b>Создать лот</b></router-link>
+    <div class="profile-columns">
+      <!-- Слева: мои лоты -->
+      <section class="profile-column">
+        <div class="column-head">
+          <h2>Мои лоты <span class="count">{{ myLots.length }}</span></h2>
+          <router-link to="/create" class="button small">+ Создать</router-link>
+        </div>
+        <div v-if="myLots.length === 0" class="empty small-empty">
+          <p>У вас пока нет лотов.</p>
+          <router-link to="/create" class="link">Создать первый лот →</router-link>
+        </div>
+        <ul v-else class="mini-list">
+          <li v-for="lot in myLots" :key="lot.id">
+            <router-link :to="'/lots/' + lot.id" class="mini-lot">
+              <img :src="lot.image" :alt="lot.title" loading="lazy" />
+              <div class="mini-body">
+                <div class="mini-title">{{ lot.title }}</div>
+                <div class="mini-sub">
+                  <span class="pill" :class="getStatus(lot)">{{ getStatusText(lot) }}</span>
+                  <span v-if="getStatus(lot) === 'active'" class="muted">
+                    ещё {{ formatTimeShort(lot.endsAt) }}
+                  </span>
+                </div>
+              </div>
+              <div class="mini-right">
+                <b>{{ getPriceText(lot) }}</b>
+                <span class="muted small">{{ getBidsCount(lot) }} ставок</span>
+              </div>
+            </router-link>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Справа: мои ставки -->
+      <section class="profile-column">
+        <div class="column-head">
+          <h2>Мои ставки <span class="count">{{ myBidLots.length }}</span></h2>
+          <router-link to="/lots" class="button small light">К лотам</router-link>
+        </div>
+        <div v-if="myBidLots.length === 0" class="empty small-empty">
+          <p>Вы пока не делали ставок.</p>
+          <router-link to="/lots" class="link">Смотреть аукционы →</router-link>
+        </div>
+        <ul v-else class="mini-list">
+          <li v-for="lot in myBidLots" :key="lot.id">
+            <router-link :to="'/lots/' + lot.id" class="mini-lot">
+              <img :src="lot.image" :alt="lot.title" loading="lazy" />
+              <div class="mini-body">
+                <div class="mini-title">{{ lot.title }}</div>
+                <div class="mini-sub">
+                  <span class="pill" :class="getMyBidState(lot).kind">{{ getMyBidState(lot).text }}</span>
+                  <span v-if="getStatus(lot) === 'active'" class="muted">
+                    ещё {{ formatTimeShort(lot.endsAt) }}
+                  </span>
+                </div>
+              </div>
+              <div class="mini-right">
+                <b>{{ getPriceText(lot) }}</b>
+                <span class="muted small">моя: {{ formatMoney(getMyMaxBid(lot)) }}</span>
+              </div>
+            </router-link>
+          </li>
+        </ul>
+      </section>
     </div>
-    <table v-else class="table">
-      <thead>
-        <tr>
-          <th>Название</th>
-          <th>Цена</th>
-          <th>Статус</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr
-          v-for="lot in getMyLots()"
-          :key="lot.id"
-          class="clickable"
-          @click="router.push('/lots/' + lot.id)"
-        >
-          <td>{{ lot.title }}</td>
-          <td>{{ getPriceText(lot) }}</td>
-          <td>{{ getStatusText(lot) }}</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="block">
-    <h2>Мои ставки</h2>
-    <div v-if="getMyBidLots().length === 0" class="muted">
-      Вы пока не делали ставок. <router-link to="/"><b>Смотреть аукционы</b></router-link>
-    </div>
-    <table v-else class="table">
-      <thead>
-        <tr>
-          <th>Название</th>
-          <th>Цена</th>
-          <th>Статус</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr
-          v-for="lot in getMyBidLots()"
-          :key="lot.id"
-          class="clickable"
-          @click="router.push('/lots/' + lot.id)"
-        >
-          <td>{{ lot.title }}</td>
-          <td>{{ getPriceText(lot) }}</td>
-          <td>{{ getStatusText(lot) }}</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="block">
-    <h2>Смена никнейма</h2>
-    <form class="form" @submit.prevent="submitUsername">
-      <label class="field">
-        Новый никнейм
-        <input v-model="newUsername" type="text" />
-      </label>
-      <div v-if="usernameError" class="error">{{ usernameError }}</div>
-      <div v-if="usernameDone" class="success">{{ usernameDone }}</div>
-      <button class="button" type="submit">Сохранить</button>
-    </form>
-  </div>
-
-  <div class="block">
-    <h2>Смена пароля</h2>
-    <form class="form" @submit.prevent="submitPassword">
-      <label class="field">
-        Новый пароль
-        <input v-model="newPassword" type="password" />
-      </label>
-      <label class="field">
-        Подтверждение пароля
-        <input v-model="confirm" type="password" />
-      </label>
-      <div v-if="passwordError" class="error">{{ passwordError }}</div>
-      <div v-if="passwordDone" class="success">{{ passwordDone }}</div>
-      <button class="button" type="submit">Сохранить</button>
-    </form>
-  </div>
-
-  <div class="block">
-    <button class="button danger" @click="exit">Выйти</button>
   </div>
 </template>

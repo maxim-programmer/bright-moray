@@ -1,7 +1,7 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { createLot } from '../store'
+import { createLot, categories, getCategory } from '../store'
 
 const router = useRouter()
 const title = ref('')
@@ -11,6 +11,10 @@ const fileName = ref('')
 const startPrice = ref('')
 const step = ref('')
 const hours = ref('')
+const category = ref('')
+const subcategory = ref('')
+const subs = computed(() => getCategory(category.value)?.subs || [])
+watch(category, () => (subcategory.value = ''))
 const error = ref('')
 
 function onFileChange(event) {
@@ -24,7 +28,7 @@ function submit() {
   const stepValue = Number(step.value)
   const hoursValue = Number(hours.value)
 
-  if (!title.value || !description.value || !image.value || !startPrice.value || !step.value || !hours.value) {
+  if (!title.value || !description.value || !category.value || !subcategory.value || !image.value || !startPrice.value || !step.value || !hours.value) {
     error.value = 'Заполните все поля'
     return
   }
@@ -41,6 +45,8 @@ function submit() {
     title: title.value,
     description: description.value,
     image: image.value,
+    category: category.value,
+    subcategory: subcategory.value,
     startPrice: price,
     step: stepValue,
     hours: hoursValue
@@ -60,6 +66,22 @@ function submit() {
       Описание
       <textarea v-model="description"></textarea>
     </label>
+    <div class="field-row">
+      <label class="field">
+        Категория
+        <select v-model="category">
+          <option value="" disabled>Выберите</option>
+          <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+        </select>
+      </label>
+      <label class="field">
+        Подкатегория
+        <select v-model="subcategory" :disabled="!category">
+          <option value="" disabled>{{ category ? 'Выберите' : 'Сначала категорию' }}</option>
+          <option v-for="sub in subs" :key="sub.id" :value="sub.id">{{ sub.name }}</option>
+        </select>
+      </label>
+    </div>
     <div class="field">
       Фотография
       <label class="file-box">
@@ -69,14 +91,16 @@ function submit() {
         <span v-if="fileName" class="muted">{{ fileName }}</span>
       </label>
     </div>
-    <label class="field">
-      Начальная цена, ₽
-      <input v-model="startPrice" type="number" min="1" />
-    </label>
-    <label class="field">
-      Шаг ставки, ₽
-      <input v-model="step" type="number" min="1" />
-    </label>
+    <div class="field-row">
+      <label class="field">
+        Начальная цена, ₽
+        <input v-model="startPrice" type="number" min="1" />
+      </label>
+      <label class="field">
+        Шаг ставки, ₽
+        <input v-model="step" type="number" min="1" />
+      </label>
+    </div>
     <label class="field">
       Длительность аукциона, часов
       <input v-model="hours" type="number" min="1" />

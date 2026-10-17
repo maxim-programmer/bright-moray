@@ -4,7 +4,8 @@ import AppHeader from './components/AppHeader.vue'
 
 <template>
   <AppHeader />
-  <main class="container">
-    <router-view :key="$route.fullPath" />
+  <main class="container" :class="{ wide: $route.path === '/lots' || $route.path === '/' }">
+    <!-- ключ по path, а не fullPath: смена фильтров (query) не пересоздаёт страницу -->
+    <router-view :key="$route.path" />
   </main>
 </template>
