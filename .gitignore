@@ -20,3 +20,6 @@ tmp/
 uploads/
 pgdata/
 *.db
+
+.gigacode/
+
