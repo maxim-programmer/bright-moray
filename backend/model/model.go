@@ -74,10 +74,13 @@ type CreateLotRequest struct {
 	StartPrice  int     `json:"start_price"`
 	Step        int     `json:"step"`
 	Hours       float64 `json:"hours"`
+	AuthorID    int64   `json:"author_id"`
 }
 
 type PlaceBidRequest struct {
-	Amount int `json:"amount"`
+	LotID  int64 `json:"lot_id"`
+	UserID int64 `json:"user_id"`
+	Amount int   `json:"amount"`
 }
 
 type UpdateProfileRequest struct {

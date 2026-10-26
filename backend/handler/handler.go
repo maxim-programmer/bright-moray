@@ -172,10 +172,18 @@ func (h *Handler) CreateLot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authorID := extractID(r, "author_id")
 	var req model.CreateLotRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	authorID := req.AuthorID
+	if authorID == 0 {
+		authorID = extractID(r, "author_id")
+	}
+	if authorID == 0 {
+		sendError(w, http.StatusBadRequest, "author_id is required")
 		return
 	}
 
@@ -303,12 +311,20 @@ func (h *Handler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lotID := extractID(r, "lot_id")
-	userID := extractID(r, "user_id")
-
 	var req model.PlaceBidRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	lotID := req.LotID
+	userID := req.UserID
+	if lotID == 0 || userID == 0 {
+		lotID = extractID(r, "lot_id")
+		userID = extractID(r, "user_id")
+	}
+	if lotID == 0 || userID == 0 {
+		sendError(w, http.StatusBadRequest, "lot_id and user_id are required")
 		return
 	}
 
@@ -411,12 +427,13 @@ func SetupRoutes(mux *http.ServeMux, h *Handler) {
 
 	mux.HandleFunc("/api/lots/", func(w http.ResponseWriter, r *http.Request) {
 		idStr := strings.TrimPrefix(r.URL.Path, "/api/lots/")
+		q := r.URL.Query()
+		q.Set("id", idStr)
+		r.URL.RawQuery = q.Encode()
 		switch r.Method {
 		case http.MethodGet:
-			r.URL.Query().Set("id", idStr)
 			h.GetLot(w, r)
 		case http.MethodDelete:
-			r.URL.Query().Set("id", idStr)
 			h.CancelLot(w, r)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)

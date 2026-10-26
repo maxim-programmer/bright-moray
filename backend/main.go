@@ -42,7 +42,7 @@ func main() {
 	}
 
 	go func() {
-		fmt.Println("Запуск HTTP сервера на порту", cfg.Port)
+		log.Println("Запуск HTTP сервера на порту", cfg.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}
@@ -56,7 +56,7 @@ func main() {
 	defer cancel()
 	server.Shutdown(ctx)
 
-	fmt.Println("Сервер остановлен")
+	log.Println("Сервер остановлен")
 }
 
 func newPool(dsn string) (*sql.DB, error) {
