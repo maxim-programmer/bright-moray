@@ -24,8 +24,12 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:-auction_pass}
     command: >
       sh -c "
-        PGPASSWORD=${POSTGRES_PASSWORD:-auction_pass} psql -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction} -f /docker-entrypoint-initdb.d/001_init_schema.sql
-        PGPASSWORD=${POSTGRES_PASSWORD:-auction_pass} psql -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction} -f /docker-entrypoint-initdb.d/002_seed_categories.sql
+        until pg_isready -h db -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction}; do
+          echo 'waiting for postgres...'
+          sleep 1
+        done
+        PGPASSWORD=${POSTGRES_PASSWORD:-auction_pass} psql -h db -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction} -f /docker-entrypoint-initdb.d/001_init_schema.sql
+        PGPASSWORD=${POSTGRES_PASSWORD:-auction_pass} psql -h db -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction} -f /docker-entrypoint-initdb.d/002_seed_categories.sql
       "
     volumes:
       - ./backend/migrations:/docker-entrypoint-initdb.d
