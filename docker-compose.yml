@@ -1,0 +1,65 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-auction}
+      POSTGRES_USER: ${POSTGRES_USER:-auction_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-auction_pass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  db-init:
+    image: postgres:16-alpine
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-auction_pass}
+    command: >
+      sh -c "
+        PGPASSWORD=${POSTGRES_PASSWORD:-auction_pass} psql -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction} -f /docker-entrypoint-initdb.d/001_init_schema.sql
+        PGPASSWORD=${POSTGRES_PASSWORD:-auction_pass} psql -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction} -f /docker-entrypoint-initdb.d/002_seed_categories.sql
+      "
+    volumes:
+      - ./backend/migrations:/docker-entrypoint-initdb.d
+    restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:-auction}
+      DB_USER: ${POSTGRES_USER:-auction_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-auction_pass}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "80:80"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
