@@ -1,0 +1,8 @@
+server
+*.exe
+*.exe~
+*.dll
+*.exe.manifest
+*.test
+vendor
+*.pem
