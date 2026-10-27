@@ -1,21 +1,21 @@
-FROM golang:1.27-alpine AS builder
+FROM golang:1.22-alpine AS builder
 
 WORKDIR /app
 
-RUN apk --no-cache add ca-certificates git
-
-COPY go.mod ./
-RUN go mod download
-
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o server .
+# go.sum нужно один раз сгенерировать локально (`go mod tidy`) и закоммитить —
+# тогда сборка воспроизводима, а tidy здесь ничего не изменит.
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /server .
 
-FROM scratch
+FROM alpine:3.20
 
-WORKDIR /
-COPY --from=builder /app/server .
-COPY --from=builder /app/migrations ./migrations
+RUN apk --no-cache add ca-certificates \
+    && adduser -D -u 10001 app \
+    && mkdir -p /data/uploads && chown app:app /data/uploads
 
+USER app
+COPY --from=builder /server /server
+
+ENV UPLOAD_DIR=/data/uploads
 EXPOSE 8080
-
 CMD ["/server"]

@@ -1,484 +1,297 @@
 package handler
 
 import (
-	"bright-moray/db"
-	"bright-moray/model"
+	"context"
 	"encoding/json"
+	"errors"
+	"log"
+	"net"
 	"net/http"
+	"runtime/debug"
 	"strconv"
-	"strings"
+	"sync"
+	"time"
 
-	"golang.org/x/crypto/bcrypt"
+	"auction/auth"
+	"auction/config"
+	"auction/db"
+	"auction/model"
+)
+
+const (
+	sessionCookie = "session"
+	sessionTTL    = 7 * 24 * time.Hour
+	maxJSONBody   = 1 << 20
 )
 
 type Handler struct {
-	q *db.Queries
+	q         *db.Queries
+	cfg       config.Config
+	secret    []byte
+	loginRate *limiter
+	// хеш-пустышка: сравниваем с ним, когда пользователь не найден,
+	// чтобы время ответа не выдавало существование никнейма
+	dummyHash []byte
 }
 
-func New(q *db.Queries) *Handler {
-	return &Handler{q: q}
+func New(q *db.Queries, cfg config.Config) *Handler {
+	return &Handler{
+		q:         q,
+		cfg:       cfg,
+		secret:    []byte(cfg.JWTSecret),
+		loginRate: newLimiter(10, 5*time.Minute),
+		dummyHash: mustHash("dummy-password"),
+	}
 }
 
-func sendJSON(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+/* ---------- ответы ---------- */
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("encode response: %v", err)
+	}
 }
 
-func sendError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+func writeError(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }
 
-func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
+// fail переводит ошибку слоя данных в HTTP-ответ.
+func fail(w http.ResponseWriter, err error) {
+	var ae *model.APIError
+	switch {
+	case errors.As(err, &ae):
+		writeError(w, ae.Status, ae.Code, ae.Message)
+	case errors.Is(err, db.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "Не найдено")
+	case errors.Is(err, context.Canceled):
+		// клиент ушёл — отвечать некому
+	default:
+		log.Printf("internal error: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Внутренняя ошибка сервера")
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ok"}`))
 }
 
-func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
+func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", "Некорректное тело запроса")
+		return false
 	}
-
-	var req model.RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.Name == "" || req.Username == "" || req.Telegram == "" || req.Password == "" {
-		sendError(w, http.StatusBadRequest, "all fields are required")
-		return
-	}
-
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to hash password")
-		return
-	}
-
-	user, err := h.q.CreateUser(req.Username, string(hashedPassword), req.Name, req.Telegram, req.DormID)
-	if err != nil {
-		sendError(w, http.StatusConflict, "username or telegram already exists")
-		return
-	}
-
-	sendJSON(w, http.StatusCreated, user)
+	return true
 }
 
-func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req model.LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	user, err := h.q.LoginByUsername(req.Username)
-	if err == nil && bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)) == nil {
-		sendJSON(w, http.StatusOK, model.User{
-			ID: user.ID, Username: user.Username, Name: user.Name,
-			Telegram: user.Telegram, DormID: user.DormID, CreatedAt: user.CreatedAt,
-		})
-		return
-	}
-
-	sendError(w, http.StatusUnauthorized, "invalid credentials")
+func pathID(r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	return id, err == nil && id > 0
 }
 
-func (h *Handler) GetProfile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
+/* ---------- сессии ---------- */
 
-	id := extractID(r, "id")
-	user, err := h.q.GetUserByID(id)
-	if err != nil {
-		sendError(w, http.StatusNotFound, "user not found")
-		return
-	}
-	sendJSON(w, http.StatusOK, user)
-}
-
-func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	id := extractID(r, "id")
-	var req model.UpdateProfileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	user, err := h.q.UpdateProfile(id, req.Name, req.Telegram)
-	if err != nil {
-		sendError(w, http.StatusNotFound, "user not found")
-		return
-	}
-	sendJSON(w, http.StatusOK, user)
-}
-
-func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	id := extractID(r, "id")
-	var req model.ChangePasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to hash password")
-		return
-	}
-
-	if err := h.q.ChangePassword(id, string(hashedPassword)); err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to change password")
-		return
-	}
-	sendJSON(w, http.StatusOK, map[string]string{"message": "password changed"})
-}
-
-func (h *Handler) ChangeUsername(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	id := extractID(r, "id")
-	var req model.ChangeUsernameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	user, err := h.q.ChangeUsername(id, req.NewUsername)
-	if err != nil {
-		sendError(w, http.StatusConflict, "username already taken")
-		return
-	}
-	sendJSON(w, http.StatusOK, user)
-}
-
-func (h *Handler) CreateLot(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req model.CreateLotRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	authorID := req.AuthorID
-	if authorID == 0 {
-		authorID = extractID(r, "author_id")
-	}
-	if authorID == 0 {
-		sendError(w, http.StatusBadRequest, "author_id is required")
-		return
-	}
-
-	lot, err := h.q.CreateLot(req, authorID)
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to create lot")
-		return
-	}
-	sendJSON(w, http.StatusCreated, lot)
-}
-
-func (h *Handler) GetLot(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	id := extractID(r, "id")
-	lot, err := h.q.GetLotByID(id)
-	if err != nil {
-		sendError(w, http.StatusNotFound, "lot not found")
-		return
-	}
-	sendJSON(w, http.StatusOK, lot)
-}
-
-func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	status := r.URL.Query().Get("status")
-	if status == "" {
-		status = "active"
-	}
-
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-	pageSize := 20
-	offset := (page - 1) * pageSize
-
-	lots, err := h.q.ListLots(status, pageSize, offset)
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to list lots")
-		return
-	}
-
-	total, _ := h.q.CountLots(status)
-	pages := (total + pageSize - 1) / pageSize
-
-	sendJSON(w, http.StatusOK, map[string]interface{}{
-		"lots":      lots,
-		"page":      page,
-		"totalPages": pages,
+func (h *Handler) setSession(w http.ResponseWriter, userID int64) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    auth.Sign(h.secret, userID, sessionTTL),
+		Path:     "/",
+		MaxAge:   int(sessionTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   h.cfg.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 
-func (h *Handler) CancelLot(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	lotID := extractID(r, "id")
-	authorID := extractID(r, "author_id")
-
-	if err := h.q.CancelLot(lotID, authorID); err != nil {
-		sendError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	w.WriteHeader(http.StatusOK)
+func (h *Handler) clearSession(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: h.cfg.CookieSecure, SameSite: http.SameSiteLaxMode,
+	})
 }
 
-func (h *Handler) GetMyLots(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
+// userID возвращает id авторизованного пользователя или 0.
+// Токен берётся из cookie, а при её отсутствии — из заголовка Authorization: Bearer.
+func (h *Handler) userID(r *http.Request) int64 {
+	token := ""
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		token = c.Value
+	} else if a := r.Header.Get("Authorization"); len(a) > 7 && a[:7] == "Bearer " {
+		token = a[7:]
 	}
-
-	authorID := extractID(r, "author_id")
-	lots, err := h.q.GetMyLots(authorID)
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to get lots")
-		return
-	}
-	sendJSON(w, http.StatusOK, lots)
-}
-
-func (h *Handler) GetMyBidLots(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	userID := extractID(r, "user_id")
-	lots, err := h.q.GetMyBidLots(userID)
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to get lots")
-		return
-	}
-	sendJSON(w, http.StatusOK, lots)
-}
-
-func (h *Handler) GetLotBids(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	lotID := extractID(r, "lot_id")
-	bids, err := h.q.GetLotBids(lotID)
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to get bids")
-		return
-	}
-	sendJSON(w, http.StatusOK, bids)
-}
-
-func (h *Handler) PlaceBid(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req model.PlaceBidRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	lotID := req.LotID
-	userID := req.UserID
-	if lotID == 0 || userID == 0 {
-		lotID = extractID(r, "lot_id")
-		userID = extractID(r, "user_id")
-	}
-	if lotID == 0 || userID == 0 {
-		sendError(w, http.StatusBadRequest, "lot_id and user_id are required")
-		return
-	}
-
-	bid, err := h.q.PlaceBid(lotID, userID, req.Amount)
-	if err != nil {
-		sendError(w, http.StatusBadRequest, "failed to place bid")
-		return
-	}
-	sendJSON(w, http.StatusCreated, bid)
-}
-
-func (h *Handler) GetCategories(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	cats, err := h.q.GetCategories()
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to get categories")
-		return
-	}
-	sendJSON(w, http.StatusOK, cats)
-}
-
-func (h *Handler) GetDorms(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	dorms, err := h.q.GetDorms()
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to get dorms")
-		return
-	}
-	sendJSON(w, http.StatusOK, dorms)
-}
-
-func (h *Handler) GetUserStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	userID := extractID(r, "user_id")
-	stats, err := h.q.GetUserStats(userID)
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, "failed to get stats")
-		return
-	}
-	sendJSON(w, http.StatusOK, stats)
-}
-
-func extractID(r *http.Request, param string) int64 {
-	idStr := r.URL.Query().Get(param)
-	if idStr == "" {
+	if token == "" {
 		return 0
 	}
-	id, err := strconv.ParseInt(idStr, 10, 64)
+	id, err := auth.Parse(h.secret, token)
 	if err != nil {
 		return 0
 	}
 	return id
 }
 
+func (h *Handler) authed(fn func(w http.ResponseWriter, r *http.Request, uid int64)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid := h.userID(r)
+		if uid == 0 {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "Войдите в аккаунт")
+			return
+		}
+		fn(w, r, uid)
+	}
+}
+
+/* ---------- ограничитель попыток входа ---------- */
+
+type limiter struct {
+	mu     sync.Mutex
+	hits   map[string][]time.Time
+	max    int
+	window time.Duration
+}
+
+func newLimiter(max int, window time.Duration) *limiter {
+	return &limiter{hits: map[string][]time.Time{}, max: max, window: window}
+}
+
+func (l *limiter) allow(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	recent := l.hits[key][:0]
+	for _, t := range l.hits[key] {
+		if now.Sub(t) < l.window {
+			recent = append(recent, t)
+		}
+	}
+	if len(recent) >= l.max {
+		l.hits[key] = recent
+		return false
+	}
+	l.hits[key] = append(recent, now)
+	if len(l.hits) > 10000 { // защита от разрастания карты
+		for k, v := range l.hits {
+			if len(v) == 0 || now.Sub(v[len(v)-1]) >= l.window {
+				delete(l.hits, k)
+			}
+		}
+	}
+	return true
+}
+
+func (l *limiter) reset(key string) {
+	l.mu.Lock()
+	delete(l.hits, key)
+	l.mu.Unlock()
+}
+
+func clientIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+/* ---------- middleware ---------- */
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+// Middleware: восстановление после паники, лог запросов, базовые заголовки безопасности.
+func Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		defer func() {
+			if p := recover(); p != nil {
+				log.Printf("panic: %v\n%s", p, debug.Stack())
+				writeError(rec, http.StatusInternalServerError, "internal", "Внутренняя ошибка сервера")
+			}
+			log.Printf("%s %s %d %s", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
+		}()
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(rec, r)
+	})
+}
+
+/* ---------- маршруты ---------- */
+
 func SetupRoutes(mux *http.ServeMux, h *Handler) {
-	mux.HandleFunc("/health", h.Health)
+	mux.HandleFunc("GET /health", h.Health)
+	mux.HandleFunc("GET /api/time", h.ServerTime)
 
-	mux.HandleFunc("/api/auth/register", h.Register)
-	mux.HandleFunc("/api/auth/login", h.Login)
+	mux.HandleFunc("POST /api/auth/register", h.Register)
+	mux.HandleFunc("POST /api/auth/login", h.Login)
+	mux.HandleFunc("POST /api/auth/logout", h.Logout)
+	mux.HandleFunc("GET /api/auth/me", h.authed(h.Me))
 
-	mux.HandleFunc("/api/users", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			h.GetProfile(w, r)
-		case http.MethodPut:
-			h.UpdateProfile(w, r)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
+	mux.HandleFunc("PUT /api/me/profile", h.authed(h.UpdateProfile))
+	mux.HandleFunc("PUT /api/me/username", h.authed(h.ChangeUsername))
+	mux.HandleFunc("PUT /api/me/password", h.authed(h.ChangePassword))
+	mux.HandleFunc("GET /api/me/stats", h.authed(h.MyStats))
+	mux.HandleFunc("GET /api/me/lots", h.authed(h.MyLots))
+	mux.HandleFunc("GET /api/me/bids", h.authed(h.MyBidLots))
+
+	mux.HandleFunc("GET /api/lots", h.ListLots)
+	mux.HandleFunc("POST /api/lots", h.authed(h.CreateLot))
+	mux.HandleFunc("GET /api/lots/random", h.RandomLot)
+	mux.HandleFunc("GET /api/lots/{id}", h.GetLot)
+	mux.HandleFunc("DELETE /api/lots/{id}", h.authed(h.CancelLot))
+	mux.HandleFunc("GET /api/lots/{id}/similar", h.SimilarLots)
+	mux.HandleFunc("GET /api/lots/{id}/bids", h.GetLotBids)
+	mux.HandleFunc("POST /api/lots/{id}/bids", h.authed(h.PlaceBid))
+
+	mux.HandleFunc("POST /api/uploads", h.authed(h.Upload))
+	mux.HandleFunc("GET /uploads/{name}", h.ServeUpload)
+
+	mux.HandleFunc("GET /api/categories", h.GetCategories)
+	mux.HandleFunc("GET /api/dorms", h.GetDorms)
+
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, "not_found", "Такого метода нет")
 	})
+}
 
-	mux.HandleFunc("/api/users/change-password", h.ChangePassword)
-	mux.HandleFunc("/api/users/change-username", h.ChangeUsername)
+func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := h.q.Ping(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "db unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
 
-	mux.HandleFunc("/api/lots", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			h.ListLots(w, r)
-		case http.MethodPost:
-			h.CreateLot(w, r)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
+// ServerTime нужен фронтенду, чтобы считать таймеры по серверным часам, а не по часам клиента.
+func (h *Handler) ServerTime(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]int64{"now": time.Now().UnixMilli()})
+}
 
-	mux.HandleFunc("/api/lots/my", h.GetMyLots)
-	mux.HandleFunc("/api/lots/my-bids", h.GetMyBidLots)
+func (h *Handler) GetCategories(w http.ResponseWriter, r *http.Request) {
+	cats, err := h.q.GetCategories(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cats)
+}
 
-	mux.HandleFunc("/api/lots/", func(w http.ResponseWriter, r *http.Request) {
-		idStr := strings.TrimPrefix(r.URL.Path, "/api/lots/")
-		q := r.URL.Query()
-		q.Set("id", idStr)
-		r.URL.RawQuery = q.Encode()
-		switch r.Method {
-		case http.MethodGet:
-			h.GetLot(w, r)
-		case http.MethodDelete:
-			h.CancelLot(w, r)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
-
-	mux.HandleFunc("/api/lots/bids", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			h.GetLotBids(w, r)
-		case http.MethodPost:
-			h.PlaceBid(w, r)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
-
-	mux.HandleFunc("/api/lots/bids/", func(w http.ResponseWriter, r *http.Request) {
-		lotID := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/lots/bids/"), "/")[0]
-		r.URL.Query().Set("lot_id", lotID)
-		switch r.Method {
-		case http.MethodGet:
-			h.GetLotBids(w, r)
-		case http.MethodPost:
-			h.PlaceBid(w, r)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
-
-	mux.HandleFunc("/api/categories", h.GetCategories)
-	mux.HandleFunc("/api/dorms", h.GetDorms)
-	mux.HandleFunc("/api/stats", h.GetUserStats)
+func (h *Handler) GetDorms(w http.ResponseWriter, r *http.Request) {
+	dorms, err := h.q.GetDorms(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dorms)
 }

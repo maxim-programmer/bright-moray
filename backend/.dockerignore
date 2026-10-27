@@ -1,3 +1,4 @@
-.migrations
+uploads/
 *.log
 .env
+.env.*
