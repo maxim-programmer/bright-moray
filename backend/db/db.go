@@ -217,8 +217,12 @@ func (q *Queries) GetCategories() ([]model.Category, error) {
 		if err := rows.Scan(&cat.ID, &cat.Name, &cat.Description); err != nil {
 			return nil, err
 		}
-		categories[cat.ID] = &cat
 		result = append(result, cat)
+	}
+
+	// Build map from result to get pointers
+	for i := range result {
+		categories[result[i].ID] = &result[i]
 	}
 
 	rowsSub, err := q.db.QueryContext(context.Background(),
