@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Handler struct {
@@ -56,7 +58,13 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.q.CreateUser(req.Username, req.Password, req.Name, req.Telegram, req.DormID)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+
+	user, err := h.q.CreateUser(req.Username, string(hashedPassword), req.Name, req.Telegram, req.DormID)
 	if err != nil {
 		sendError(w, http.StatusConflict, "username or telegram already exists")
 		return
@@ -78,7 +86,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := h.q.LoginByUsername(req.Username)
-	if err == nil && user.Password == req.Password {
+	if err == nil && bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)) == nil {
 		sendJSON(w, http.StatusOK, model.User{
 			ID: user.ID, Username: user.Username, Name: user.Name,
 			Telegram: user.Telegram, DormID: user.DormID, CreatedAt: user.CreatedAt,
@@ -138,7 +146,13 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.q.ChangePassword(id, req.NewPassword); err != nil {
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+
+	if err := h.q.ChangePassword(id, string(hashedPassword)); err != nil {
 		sendError(w, http.StatusInternalServerError, "failed to change password")
 		return
 	}
