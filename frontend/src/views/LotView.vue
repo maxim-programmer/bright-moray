@@ -36,14 +36,14 @@ const category = computed(() => (lot ? getCategory(lot.category) : null))
 const sub = computed(() => (lot ? getSubcategory(lot.category, lot.subcategory) : null))
 const dorm = computed(() => (lot ? getLotDorm(lot) : null))
 const similar = computed(() => (lot ? getSimilarLots(lot) : []))
-const isLeader = computed(() => lot && getLeaderId(lot) === state.currentUserId)
+const isLeader = computed(() => lot && getLeaderId(lot) === state.user?.id)
 
 // После завершения продавец и победитель видят контакты друг друга
 const contact = computed(() => {
   if (!lot || getStatus(lot) !== 'finished' || !hasBids(lot)) return null
   const winnerId = getLeaderId(lot)
-  if (state.currentUserId === lot.authorId) return { role: 'Победитель', user: getUser(winnerId) }
-  if (state.currentUserId === winnerId) return { role: 'Продавец', user: getUser(lot.authorId) }
+  if (state.user?.id === lot.authorId) return { role: 'Победитель', user: getUser(winnerId) }
+  if (state.user?.id === winnerId) return { role: 'Продавец', user: getUser(lot.authorId) }
   return null
 })
 
@@ -140,11 +140,11 @@ function openRandom() {
           </p>
           <div class="timer"><span class="muted">До конца:</span> {{ formatTimeLeft(lot.endsAt) }}</div>
 
-          <div v-if="!state.currentUserId" class="muted">
+          <div v-if="!state.user" class="muted">
             Чтобы сделать ставку,
             <router-link :to="{ path: '/login', query: { redirect: route.fullPath } }"><b>войдите</b></router-link>.
           </div>
-          <div v-else-if="lot.authorId === state.currentUserId" class="muted">
+          <div v-else-if="lot.authorId === state.user?.id" class="muted">
             Это ваш лот, делать ставки на него нельзя.
           </div>
           <div v-else-if="isLeader" class="muted">Ваша ставка лидирует — ждём соперников.</div>
@@ -159,7 +159,7 @@ function openRandom() {
           </template>
           <div v-if="error" class="error bid-error">{{ error }}</div>
 
-          <div v-if="lot.authorId === state.currentUserId && !hasBids(lot)" class="cancel-row">
+          <div v-if="lot.authorId === state.user?.id && !hasBids(lot)" class="cancel-row">
             <button class="button light small" @click="cancel">Отменить аукцион</button>
           </div>
         </div>

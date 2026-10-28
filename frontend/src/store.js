@@ -1,18 +1,8 @@
-import { reactive, watch } from 'vue'
+import { reactive } from 'vue'
 import { api, ApiError } from './api'
 import { users, lots, bids } from './mock/data'
 
-function loadSession() {
-  try {
-    const id = Number(localStorage.getItem('currentUserId'))
-    return users.some((u) => u.id === id) ? id : null
-  } catch {
-    return null
-  }
-}
-
 export const state = reactive({
-  currentUserId: loadSession(),
   user: null, // профиль из /auth/me; null — не вошли
   categories: [], // справочники грузятся один раз при старте
   dorms: [],
@@ -22,18 +12,6 @@ export const state = reactive({
   now: Date.now(), // серверное время, обновляется раз в секунду
   initError: ''
 })
-
-watch(
-  () => state.currentUserId,
-  (id) => {
-    try {
-      if (id) localStorage.setItem('currentUserId', String(id))
-      else localStorage.removeItem('currentUserId')
-    } catch {
-      // localStorage недоступен — просто не запоминаем сессию
-    }
-  }
-)
 
 /* ---------- Серверное время ---------- */
 
@@ -171,7 +149,7 @@ export function getUsername(id) {
 }
 
 export function getCurrentUser() {
-  return getUser(state.currentUserId)
+  return state.user
 }
 
 export function getLotDorm(lot) {
@@ -370,34 +348,18 @@ export function isEndingSoon(lot) {
 
 /* ---------- Авторизация ---------- */
 
-export function register(data) {
-  const { name, username, telegram, dormId, password, confirm } = data
-  if (!name || !username || !telegram || !dormId || !password || !confirm) return 'Заполните все поля'
-  if (password.length < 6) return 'Пароль должен быть не короче 6 символов'
-  if (password !== confirm) return 'Пароли не совпадают'
-  if (state.users.some((u) => u.username === username)) return 'Такой никнейм уже занят'
-  const user = {
-    id: Date.now(),
-    username,
-    password,
-    name,
-    telegram: telegram.replace(/^@/, ''),
-    dormId: Number(dormId)
-  }
-  state.users.push(user)
-  state.currentUserId = user.id
-  return null
+// Сервер ставит httpOnly-cookie сессии, в JS храним только профиль
+export async function register(data) {
+  state.user = await api.register({ ...data, dormId: Number(data.dormId) })
 }
 
-export function login(username, password) {
-  const user = state.users.find((u) => u.username === username && u.password === password)
-  if (!user) return 'Неверный никнейм или пароль'
-  state.currentUserId = user.id
-  return null
+export async function login(username, password) {
+  state.user = await api.login(username, password)
 }
 
-export function logout() {
-  state.currentUserId = null
+export async function logout() {
+  await api.logout()
+  state.user = null
 }
 
 /* ---------- Действия с лотами ---------- */
@@ -410,7 +372,7 @@ export function createLot(data) {
     image: data.image,
     category: data.category,
     subcategory: data.subcategory,
-    authorId: state.currentUserId,
+    authorId: state.user?.id,
     startPrice: data.startPrice,
     step: data.step,
     createdAt: Date.now(),
@@ -422,17 +384,17 @@ export function createLot(data) {
 }
 
 export function placeBid(lot, amount) {
-  if (!state.currentUserId) return 'Войдите, чтобы делать ставки'
-  if (lot.authorId === state.currentUserId) return 'Нельзя делать ставку на свой лот'
+  if (!state.user?.id) return 'Войдите, чтобы делать ставки'
+  if (lot.authorId === state.user?.id) return 'Нельзя делать ставку на свой лот'
   if (getStatus(lot) !== 'active') return 'Аукцион уже закрыт'
-  if (getLeaderId(lot) === state.currentUserId) return 'Ваша ставка и так лидирует'
+  if (getLeaderId(lot) === state.user?.id) return 'Ваша ставка и так лидирует'
   if (!amount || amount < getMinBid(lot)) {
     return 'Минимальная ставка: ' + formatMoney(getMinBid(lot))
   }
   state.bids.push({
     id: Date.now(),
     lotId: lot.id,
-    userId: state.currentUserId,
+    userId: state.user?.id,
     amount: amount,
     createdAt: Date.now()
   })
@@ -440,7 +402,7 @@ export function placeBid(lot, amount) {
 }
 
 export function cancelLot(lot) {
-  if (lot.authorId !== state.currentUserId) return
+  if (lot.authorId !== state.user?.id) return
   if (getStatus(lot) !== 'active') return
   if (hasBids(lot)) return
   lot.status = 'cancelled'
@@ -460,7 +422,7 @@ export function updateProfile(data) {
 
 export function changeUsername(newUsername) {
   if (!newUsername) return 'Введите новый никнейм'
-  const taken = state.users.some((u) => u.username === newUsername && u.id !== state.currentUserId)
+  const taken = state.users.some((u) => u.username === newUsername && u.id !== state.user?.id)
   if (taken) return 'Такой никнейм уже занят'
   getCurrentUser().username = newUsername
   return null
@@ -477,7 +439,7 @@ export function changePassword(current, newPassword, confirm) {
 
 export function getMyLots() {
   return sortLots(
-    state.lots.filter((l) => l.authorId === state.currentUserId),
+    state.lots.filter((l) => l.authorId === state.user?.id),
     'ending'
   )
 }
@@ -485,20 +447,20 @@ export function getMyLots() {
 export function getMyBidLots() {
   return sortLots(
     state.lots.filter((l) =>
-      state.bids.some((b) => b.lotId === l.id && b.userId === state.currentUserId)
+      state.bids.some((b) => b.lotId === l.id && b.userId === state.user?.id)
     ),
     'ending'
   )
 }
 
 export function getMyMaxBid(lot) {
-  const mine = state.bids.filter((b) => b.lotId === lot.id && b.userId === state.currentUserId)
+  const mine = state.bids.filter((b) => b.lotId === lot.id && b.userId === state.user?.id)
   return mine.length > 0 ? Math.max(...mine.map((b) => b.amount)) : 0
 }
 
 // Положение пользователя в торгах по лоту — для «Моих ставок»
 export function getMyBidState(lot) {
-  const leading = getLeaderId(lot) === state.currentUserId
+  const leading = getLeaderId(lot) === state.user?.id
   const status = getStatus(lot)
   if (status === 'cancelled') return { text: 'Аукцион отменён', kind: 'neutral' }
   if (status === 'finished') {

@@ -15,8 +15,8 @@ const router = createRouter({
     { path: '/', component: HomeView },
     { path: '/lots', component: CatalogView },
     { path: '/lots/:id', component: LotView },
-    { path: '/login', component: LoginView },
-    { path: '/register', component: RegisterView },
+    { path: '/login', component: LoginView, meta: { guestOnly: true } },
+    { path: '/register', component: RegisterView, meta: { guestOnly: true } },
     { path: '/create', component: CreateLotView, meta: { needAuth: true } },
     { path: '/profile', component: ProfileView, meta: { needAuth: true } },
     { path: '/settings', component: SettingsView, meta: { needAuth: true } },
@@ -33,8 +33,13 @@ const router = createRouter({
 // Ждём /auth/me: иначе после обновления страницы вошедшего пользователя выкинет на вход
 router.beforeEach(async (to) => {
   await initSession()
-  if (to.meta.needAuth && !state.currentUserId) {
+  if (to.meta.needAuth && !state.user) {
     return { path: '/login', query: { redirect: to.fullPath } }
+  }
+  // уже вошедшему нечего делать на страницах входа и регистрации
+  if (to.meta.guestOnly && state.user) {
+    const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '/'
+    return redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/'
   }
 })
 
