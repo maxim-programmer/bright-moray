@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import LotCard from '../components/LotCard.vue'
-import { state, categories, getActiveLots, sortLots, getRandomLotId } from '../store'
+import { state, getActiveLots, sortLots, getRandomLotId } from '../store'
 
 const router = useRouter()
 
@@ -62,7 +62,7 @@ function openRandom() {
       <router-link to="/lots" class="link">Весь каталог →</router-link>
     </div>
     <div class="cat-tiles">
-      <div v-for="cat in categories" :key="cat.id" class="cat-tile">
+      <div v-for="cat in state.categories" :key="cat.id" class="cat-tile">
         <router-link :to="{ path: '/lots', query: { cat: cat.id } }" class="cat-tile-head">
           <span class="cat-tile-name">{{ cat.name }}</span>
           <span class="cat-tile-count">{{ counts[cat.id] || 0 }}</span>
