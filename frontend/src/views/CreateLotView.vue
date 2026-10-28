@@ -1,12 +1,14 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { state, createLot, getCategory } from '../store'
+import { api } from '../api'
+import { state, getCategory, handleApiError } from '../store'
 
 const router = useRouter()
 const title = ref('')
 const description = ref('')
-const image = ref('')
+const file = ref(null)
+const preview = ref('') // blob:-ссылка только для превью, на сервер уходит url из /api/uploads
 const fileName = ref('')
 const startPrice = ref('')
 const step = ref('')
@@ -16,19 +18,30 @@ const subcategory = ref('')
 const subs = computed(() => getCategory(category.value)?.subs || [])
 watch(category, () => (subcategory.value = ''))
 const error = ref('')
+const busy = ref(false)
 
+function setPreview(url) {
+  if (preview.value) URL.revokeObjectURL(preview.value)
+  preview.value = url
+}
+onUnmounted(() => setPreview(''))
+
+// Файл грузим только при отправке формы, чтобы на сервере не копились неиспользованные картинки
 function onFileChange(event) {
-  const file = event.target.files[0]
-  image.value = file ? URL.createObjectURL(file) : ''
-  fileName.value = file ? file.name : ''
+  const selected = event.target.files[0]
+  file.value = selected || null
+  setPreview(selected ? URL.createObjectURL(selected) : '')
+  fileName.value = selected ? selected.name : ''
 }
 
-function submit() {
+async function submit() {
+  if (busy.value) return
+  error.value = ''
   const price = Number(startPrice.value)
   const stepValue = Number(step.value)
   const hoursValue = Number(hours.value)
 
-  if (!title.value || !description.value || !category.value || !subcategory.value || !image.value || !startPrice.value || !step.value || !hours.value) {
+  if (!title.value || !description.value || !category.value || !subcategory.value || !file.value || !startPrice.value || !step.value || !hours.value) {
     error.value = 'Заполните все поля'
     return
   }
@@ -41,17 +54,26 @@ function submit() {
     return
   }
 
-  const id = createLot({
-    title: title.value,
-    description: description.value,
-    image: image.value,
-    category: category.value,
-    subcategory: subcategory.value,
-    startPrice: price,
-    step: stepValue,
-    hours: hoursValue
-  })
-  router.push('/lots/' + id)
+  busy.value = true
+  try {
+    const { url } = await api.uploadImage(file.value)
+    const lot = await api.createLot({
+      title: title.value,
+      description: description.value,
+      image: url,
+      category: category.value,
+      subcategory: subcategory.value,
+      startPrice: price,
+      step: stepValue,
+      hours: hoursValue
+    })
+    router.push('/lots/' + lot.id)
+  } catch (e) {
+    // слишком большой файл nginx может отклонить сам, без JSON-ответа от бэкенда
+    error.value = e.status === 413 && e.code === 'error' ? 'Картинка больше 5 МБ' : handleApiError(e)
+  } finally {
+    busy.value = false
+  }
 }
 </script>
 
@@ -86,7 +108,7 @@ function submit() {
       Фотография
       <label class="file-box">
         <input type="file" accept="image/*" @change="onFileChange" />
-        <img v-if="image" :src="image" class="preview" alt="Предпросмотр" />
+        <img v-if="preview" :src="preview" class="preview" alt="Предпросмотр" />
         <span v-else class="file-hint">Нажмите, чтобы выбрать фото</span>
         <span v-if="fileName" class="muted">{{ fileName }}</span>
       </label>
@@ -106,6 +128,6 @@ function submit() {
       <input v-model="hours" type="number" min="1" />
     </label>
     <div v-if="error" class="error">{{ error }}</div>
-    <button class="button" type="submit">Опубликовать</button>
+    <button class="button" type="submit" :disabled="busy">{{ busy ? 'Загрузка…' : 'Опубликовать' }}</button>
   </form>
 </template>
