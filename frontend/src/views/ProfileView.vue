@@ -1,19 +1,14 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { api } from '../api'
 import {
   state,
-  getCurrentUser,
   getDormLabel,
-  getUserStats,
-  getMyLots,
-  getMyBidLots,
-  getMyMaxBid,
   getMyBidState,
   getPriceText,
   getStatus,
   getStatusText,
-  getBidsCount,
   formatMoney,
   formatTimeShort,
   logout,
@@ -21,10 +16,25 @@ import {
 } from '../store'
 
 const router = useRouter()
-const user = computed(() => getCurrentUser())
-const stats = computed(() => getUserStats(state.user?.id))
-const myLots = computed(() => getMyLots())
-const myBidLots = computed(() => getMyBidLots())
+const user = computed(() => state.user)
+const stats = ref({ created: 0, participated: 0, won: 0, sold: 0, rating: 0, complaints: 0 })
+const myLots = ref([])
+const myBidLots = ref([])
+const loading = ref(true)
+const error = ref('')
+
+onMounted(async () => {
+  try {
+    const [s, lots, bidLots] = await Promise.all([api.myStats(), api.myLots(), api.myBidLots()])
+    stats.value = s
+    myLots.value = lots
+    myBidLots.value = bidLots
+  } catch (e) {
+    error.value = handleApiError(e)
+  } finally {
+    loading.value = false
+  }
+})
 
 const exitError = ref('')
 async function exit() {
@@ -64,7 +74,10 @@ async function exit() {
       </div>
     </section>
 
-    <div class="profile-columns">
+    <div v-if="loading" class="muted">Загрузка…</div>
+    <div v-if="error" class="error">{{ error }}</div>
+
+    <div v-if="!loading && !error" class="profile-columns">
       <!-- Слева: мои лоты -->
       <section class="profile-column">
         <div class="column-head">
@@ -90,7 +103,7 @@ async function exit() {
               </div>
               <div class="mini-right">
                 <b>{{ getPriceText(lot) }}</b>
-                <span class="muted small">{{ getBidsCount(lot) }} ставок</span>
+                <span class="muted small">{{ lot.bidsCount }} ставок</span>
               </div>
             </router-link>
           </li>
@@ -122,7 +135,7 @@ async function exit() {
               </div>
               <div class="mini-right">
                 <b>{{ getPriceText(lot) }}</b>
-                <span class="muted small">моя: {{ formatMoney(getMyMaxBid(lot)) }}</span>
+                <span class="muted small">моя: {{ formatMoney(lot.myMaxBid) }}</span>
               </div>
             </router-link>
           </li>

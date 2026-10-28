@@ -413,31 +413,21 @@ export function cancelLot(lot) {
 
 /* ---------- Профиль и настройки ---------- */
 
-export function updateProfile(data) {
-  const { name, telegram, dormId } = data
-  if (!name || !telegram || !dormId) return 'Заполните все поля'
-  const user = getCurrentUser()
-  user.name = name
-  user.telegram = telegram.replace(/^@/, '')
-  user.dormId = Number(dormId)
-  return null
+// Профиль меняет сервер; в стор кладём то, что он вернул
+export async function updateProfile(data) {
+  state.user = await api.updateProfile({
+    name: data.name,
+    telegram: data.telegram,
+    dormId: Number(data.dormId)
+  })
 }
 
-export function changeUsername(newUsername) {
-  if (!newUsername) return 'Введите новый никнейм'
-  const taken = state.users.some((u) => u.username === newUsername && u.id !== state.user?.id)
-  if (taken) return 'Такой никнейм уже занят'
-  getCurrentUser().username = newUsername
-  return null
+export async function changeUsername(newUsername) {
+  state.user = await api.changeUsername(newUsername)
 }
 
-export function changePassword(current, newPassword, confirm) {
-  if (!current || !newPassword || !confirm) return 'Заполните все поля'
-  if (getCurrentUser().password !== current) return 'Текущий пароль указан неверно'
-  if (newPassword.length < 6) return 'Пароль должен быть не короче 6 символов'
-  if (newPassword !== confirm) return 'Пароли не совпадают'
-  getCurrentUser().password = newPassword
-  return null
+export async function changePassword(current, newPassword, confirm) {
+  await api.changePassword({ current, newPassword, confirm })
 }
 
 export function getMyLots() {
@@ -463,7 +453,7 @@ export function getMyMaxBid(lot) {
 
 // Положение пользователя в торгах по лоту — для «Моих ставок»
 export function getMyBidState(lot) {
-  const leading = getLeaderId(lot) === state.user?.id
+  const leading = Boolean(state.user) && lot.leaderId === state.user.id
   const status = getStatus(lot)
   if (status === 'cancelled') return { text: 'Аукцион отменён', kind: 'neutral' }
   if (status === 'finished') {
