@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { state } from './store'
+import { state, initSession, onUnauthorized } from './store'
 import HomeView from './views/HomeView.vue'
 import CatalogView from './views/CatalogView.vue'
 import LoginView from './views/LoginView.vue'
@@ -30,10 +30,18 @@ const router = createRouter({
   }
 })
 
-router.beforeEach((to) => {
+// Ждём /auth/me: иначе после обновления страницы вошедшего пользователя выкинет на вход
+router.beforeEach(async (to) => {
+  await initSession()
   if (to.meta.needAuth && !state.currentUserId) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
+})
+
+onUnauthorized(() => {
+  const current = router.currentRoute.value
+  if (current.path === '/login') return
+  router.push({ path: '/login', query: { redirect: current.fullPath } })
 })
 
 export default router
