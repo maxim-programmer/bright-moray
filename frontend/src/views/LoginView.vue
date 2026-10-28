@@ -1,21 +1,31 @@
 <script setup>
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { login } from '../store'
+import { login, handleApiError } from '../store'
 
 const route = useRoute()
 const router = useRouter()
 const username = ref('')
 const password = ref('')
 const error = ref('')
+const busy = ref(false)
 
-function submit() {
-  error.value = login(username.value.trim(), password.value) || ''
-  if (!error.value) {
-    // возвращаем туда, куда пользователь шёл до входа (например, «Создать лот»)
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
-    router.push(redirect.startsWith('/') ? redirect : '/')
+async function submit() {
+  if (busy.value) return
+  error.value = ''
+  busy.value = true
+  try {
+    // при превышении лимита попыток сервер вернёт 429 с готовым текстом — показываем его как есть
+    await login(username.value.trim(), password.value)
+  } catch (e) {
+    error.value = handleApiError(e)
+    return
+  } finally {
+    busy.value = false
   }
+  // возвращаем туда, куда пользователь шёл до входа (например, «Создать лот»)
+  const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
+  router.push(redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/')
 }
 </script>
 
@@ -32,7 +42,7 @@ function submit() {
       <input v-model="password" type="password" autocomplete="current-password" />
     </label>
     <div v-if="error" class="error">{{ error }}</div>
-    <button class="button" type="submit">Войти</button>
+    <button class="button" type="submit" :disabled="busy">Войти</button>
     <div class="muted">
       Нет аккаунта? <router-link to="/register"><b>Зарегистрироваться</b></router-link>
     </div>

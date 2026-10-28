@@ -1,7 +1,7 @@
 <script setup>
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { state, register } from '../store'
+import { state, register, handleApiError } from '../store'
 
 const router = useRouter()
 const form = reactive({
@@ -13,12 +13,21 @@ const form = reactive({
   confirm: ''
 })
 const error = ref('')
+const busy = ref(false)
 
-function submit() {
-  error.value = register({ ...form, username: form.username.trim() }) || ''
-  if (!error.value) {
-    router.push('/')
+async function submit() {
+  if (busy.value) return
+  error.value = ''
+  busy.value = true
+  try {
+    await register({ ...form, username: form.username.trim() })
+  } catch (e) {
+    error.value = handleApiError(e)
+    return
+  } finally {
+    busy.value = false
   }
+  router.push('/')
 }
 </script>
 
@@ -58,7 +67,7 @@ function submit() {
       <input v-model="form.confirm" type="password" autocomplete="new-password" />
     </label>
     <div v-if="error" class="error">{{ error }}</div>
-    <button class="button" type="submit">Зарегистрироваться</button>
+    <button class="button" type="submit" :disabled="busy">Зарегистрироваться</button>
     <div class="muted">
       Уже есть аккаунт? <router-link to="/login"><b>Войти</b></router-link>
     </div>

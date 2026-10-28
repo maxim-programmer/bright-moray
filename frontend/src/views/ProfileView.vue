@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   state,
@@ -16,18 +16,25 @@ import {
   getBidsCount,
   formatMoney,
   formatTimeShort,
-  logout
+  logout,
+  handleApiError
 } from '../store'
 
 const router = useRouter()
 const user = computed(() => getCurrentUser())
-const stats = computed(() => getUserStats(state.currentUserId))
+const stats = computed(() => getUserStats(state.user?.id))
 const myLots = computed(() => getMyLots())
 const myBidLots = computed(() => getMyBidLots())
 
+const exitError = ref('')
 async function exit() {
-  await router.push('/')
-  logout()
+  exitError.value = ''
+  try {
+    await logout()
+    router.push('/')
+  } catch (e) {
+    exitError.value = handleApiError(e)
+  }
 }
 </script>
 
@@ -46,6 +53,7 @@ async function exit() {
       <div class="profile-actions">
         <router-link to="/settings" class="button small light">Настройки</router-link>
         <button class="button small danger" @click="exit">Выйти</button>
+        <div v-if="exitError" class="error">{{ exitError }}</div>
       </div>
       <div class="profile-stats">
         <div class="stat"><b>{{ stats.rating }}</b><span>рейтинг</span></div>

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   state,
@@ -7,11 +7,13 @@ import {
   updateProfile,
   changeUsername,
   changePassword,
-  logout
+  logout,
+  handleApiError
 } from '../store'
 
 const router = useRouter()
 const user = getCurrentUser()
+const current = computed(() => state.user)
 
 // Личные данные
 const profile = reactive({ name: user.name || '', telegram: user.telegram || '', dormId: user.dormId || '' })
@@ -46,14 +48,20 @@ function savePassword() {
   }
 }
 
+const exitError = ref('')
 async function exit() {
-  await router.push('/')
-  logout()
+  exitError.value = ''
+  try {
+    await logout()
+    router.push('/')
+  } catch (e) {
+    exitError.value = handleApiError(e)
+  }
 }
 </script>
 
 <template>
-  <div class="settings">
+  <div v-if="current" class="settings">
     <div class="settings-head">
       <router-link to="/profile" class="link">← Назад в профиль</router-link>
       <h1>Настройки</h1>
@@ -89,7 +97,7 @@ async function exit() {
 
       <form class="form settings-card" @submit.prevent="saveUsername">
         <h2>Никнейм</h2>
-        <div class="muted">Сейчас: <b>@{{ user.username }}</b></div>
+        <div class="muted">Сейчас: <b>@{{ current.username }}</b></div>
         <label class="field">
           Новый никнейм
           <input v-model="newUsername" type="text" autocomplete="username" />
@@ -124,6 +132,7 @@ async function exit() {
           <p class="muted">Завершить сессию на этом устройстве.</p>
         </div>
         <button class="button danger" @click="exit">Выйти из аккаунта</button>
+        <div v-if="exitError" class="error">{{ exitError }}</div>
       </div>
     </div>
   </div>
