@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { createLot, categories, getCategory } from '../store'
+import { state, createLot, getCategory } from '../store'
 
 const router = useRouter()
 const title = ref('')
@@ -71,7 +71,7 @@ function submit() {
         Категория
         <select v-model="category">
           <option value="" disabled>Выберите</option>
-          <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+          <option v-for="cat in state.categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
         </select>
       </label>
       <label class="field">

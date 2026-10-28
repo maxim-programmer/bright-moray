@@ -4,8 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import LotCard from '../components/LotCard.vue'
 import Pagination from '../components/Pagination.vue'
 import {
-  categories,
-  dorms,
+  state,
   sortOptions,
   statusOptions,
   getCategory,
@@ -123,10 +122,10 @@ function toggle(catId) {
   if (expanded.has(catId)) expanded.delete(catId)
   else expanded.add(catId)
 }
-const allExpanded = computed(() => expanded.size === categories.length)
+const allExpanded = computed(() => expanded.size === state.categories.length)
 function toggleAll() {
   if (allExpanded.value) expanded.clear()
-  else categories.forEach((c) => expanded.add(c.id))
+  else state.categories.forEach((c) => expanded.add(c.id))
 }
 
 /* --- Действия --- */
@@ -175,7 +174,7 @@ const showFilters = ref(false)
             </button>
           </div>
         </li>
-        <li v-for="cat in categories" :key="cat.id">
+        <li v-for="cat in state.categories" :key="cat.id">
           <div class="cat-row">
             <button
               class="cat-item"
@@ -266,7 +265,7 @@ const showFilters = ref(false)
         </template>
         <template v-else>
           <button
-            v-for="cat in categories"
+            v-for="cat in state.categories"
             :key="cat.id"
             class="chip"
             :disabled="countFor(cat.id) === 0"
@@ -341,7 +340,7 @@ const showFilters = ref(false)
         <div class="segmented">
           <button :class="{ selected: !filters.dormId }" @click="updateQuery({ dorm: '' })">Все</button>
           <button
-            v-for="dorm in dorms"
+            v-for="dorm in state.dorms"
             :key="dorm.id"
             :class="{ selected: String(filters.dormId) === String(dorm.id) }"
             @click="updateQuery({ dorm: dorm.id })"

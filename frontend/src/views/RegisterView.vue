@@ -1,7 +1,7 @@
 <script setup>
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { register, dorms } from '../store'
+import { state, register } from '../store'
 
 const router = useRouter()
 const form = reactive({
@@ -44,7 +44,7 @@ function submit() {
       Общежитие
       <select v-model="form.dormId">
         <option value="" disabled>Выберите общежитие</option>
-        <option v-for="dorm in dorms" :key="dorm.id" :value="dorm.id">
+        <option v-for="dorm in state.dorms" :key="dorm.id" :value="dorm.id">
           {{ dorm.name }}
         </option>
       </select>

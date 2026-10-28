@@ -2,7 +2,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  dorms,
+  state,
   getCurrentUser,
   updateProfile,
   changeUsername,
@@ -77,7 +77,7 @@ async function exit() {
         <label class="field">
           Общежитие
           <select v-model="profile.dormId">
-            <option v-for="dorm in dorms" :key="dorm.id" :value="dorm.id">
+            <option v-for="dorm in state.dorms" :key="dorm.id" :value="dorm.id">
               {{ dorm.name }}
             </option>
           </select>

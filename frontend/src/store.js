@@ -1,7 +1,6 @@
 import { reactive, watch } from 'vue'
 import { api, ApiError } from './api'
 import { users, lots, bids } from './mock/data'
-import { categories, dorms } from './mock/categories'
 
 function loadSession() {
   try {
@@ -15,6 +14,8 @@ function loadSession() {
 export const state = reactive({
   currentUserId: loadSession(),
   user: null, // профиль из /auth/me; null — не вошли
+  categories: [], // справочники грузятся один раз при старте
+  dorms: [],
   users: users,
   lots: lots,
   bids: bids,
@@ -71,8 +72,17 @@ export function initSession() {
 }
 
 async function bootstrap() {
-  const [me, time] = await Promise.allSettled([api.me(), syncTime()])
+  const [me, time, categories, dorms] = await Promise.allSettled([
+    api.me(),
+    syncTime(),
+    state.categories.length ? state.categories : api.categories(),
+    state.dorms.length ? state.dorms : api.dorms()
+  ])
   const errors = []
+  for (const [key, result] of [['categories', categories], ['dorms', dorms]]) {
+    if (result.status === 'fulfilled') state[key] = result.value
+    else errors.push(result.reason)
+  }
   if (me.status === 'fulfilled') {
     state.user = me.value
   } else {
@@ -105,7 +115,6 @@ export function handleApiError(error) {
 }
 
 export const PAGE_SIZE = 20
-export { categories, dorms }
 
 export const sortOptions = [
   { id: 'ending', name: 'Скоро завершатся' },
@@ -126,7 +135,7 @@ export const statusOptions = [
 /* ---------- Справочники ---------- */
 
 export function getCategory(id) {
-  return categories.find((c) => c.id === id)
+  return state.categories.find((c) => c.id === id)
 }
 
 export function getSubcategory(categoryId, subId) {
@@ -142,7 +151,7 @@ export function getCategoryLabel(lot) {
 }
 
 export function getDorm(id) {
-  return dorms.find((d) => d.id === Number(id))
+  return state.dorms.find((d) => d.id === Number(id))
 }
 
 export function getDormLabel(id) {
