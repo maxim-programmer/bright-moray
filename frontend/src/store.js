@@ -1,4 +1,5 @@
 import { reactive, watch } from 'vue'
+import { api, ApiError } from './api'
 import { users, lots, bids } from './mock/data'
 import { categories, dorms } from './mock/categories'
 
@@ -13,10 +14,12 @@ function loadSession() {
 
 export const state = reactive({
   currentUserId: loadSession(),
+  user: null, // профиль из /auth/me; null — не вошли
   users: users,
   lots: lots,
   bids: bids,
-  now: Date.now()
+  now: Date.now(), // серверное время, обновляется раз в секунду
+  initError: ''
 })
 
 watch(
@@ -31,9 +34,75 @@ watch(
   }
 )
 
+/* ---------- Серверное время ---------- */
+
+// Часы клиента могут врать, поэтому таймеры считаем как Date.now() + поправка от /api/time
+let timeOffset = 0
+
+export function serverNow() {
+  return Date.now() + timeOffset
+}
+
+async function syncTime() {
+  const sent = Date.now()
+  const { now } = await api.serverTime()
+  const received = Date.now()
+  // ответ пришёл примерно в середине между отправкой и получением
+  timeOffset = now - Math.round((sent + received) / 2)
+  state.now = serverNow()
+}
+
 setInterval(() => {
-  state.now = Date.now()
+  state.now = serverNow()
 }, 1000)
+
+/* ---------- Инициализация сессии ---------- */
+
+let initPromise = null
+
+// Вызывается router guard'ом перед первой навигацией. Повторные вызовы ждут тот же запрос.
+export function initSession() {
+  if (!initPromise) {
+    initPromise = bootstrap().then((ok) => {
+      if (!ok) initPromise = null // при следующей навигации попробуем ещё раз
+    })
+  }
+  return initPromise
+}
+
+async function bootstrap() {
+  const [me, time] = await Promise.allSettled([api.me(), syncTime()])
+  const errors = []
+  if (me.status === 'fulfilled') {
+    state.user = me.value
+  } else {
+    state.user = null
+    // 401 — просто не вошли, это не ошибка
+    if (me.reason?.status !== 401) errors.push(me.reason)
+  }
+  if (time.status === 'rejected') errors.push(time.reason)
+  state.initError = errors.length ? errors[0].message || 'Ошибка сервера' : ''
+  return errors.length === 0
+}
+
+/* ---------- Ошибки API ---------- */
+
+let unauthorizedHandler = null
+
+// router.js регистрирует сюда переход на страницу входа
+export function onUnauthorized(handler) {
+  unauthorizedHandler = handler
+}
+
+// Возвращает текст ошибки для пользователя. Если сессия истекла (401 от защищённого метода) —
+// забывает пользователя и отправляет на вход.
+export function handleApiError(error) {
+  if (error instanceof ApiError && error.status === 401 && error.code === 'unauthorized') {
+    state.user = null
+    if (unauthorizedHandler) unauthorizedHandler()
+  }
+  return error?.message || 'Ошибка сервера'
+}
 
 export const PAGE_SIZE = 20
 export { categories, dorms }
