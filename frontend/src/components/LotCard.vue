@@ -4,7 +4,6 @@ import {
   formatTimeShort,
   getStatus,
   getStatusText,
-  getBidsCount,
   getCategory,
   getSubcategory,
   isEndingSoon
@@ -32,7 +31,7 @@ defineProps({
       <div class="card-title">{{ lot.title }}</div>
       <div class="card-price">{{ getPriceText(lot) }}</div>
       <div class="card-meta">
-        <span>{{ getBidsCount(lot) }} ст.</span>
+        <span>{{ lot.bidsCount }} ст.</span>
         <span v-if="getStatus(lot) === 'active'">ещё {{ formatTimeShort(lot.endsAt) }}</span>
       </div>
     </div>

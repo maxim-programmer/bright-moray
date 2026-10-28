@@ -1,28 +1,41 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import LotCard from '../components/LotCard.vue'
-import { state, getActiveLots, sortLots, getRandomLotId } from '../store'
+import { api } from '../api'
+import { state, handleApiError } from '../store'
 
 const router = useRouter()
 
-const active = computed(() => getActiveLots())
-const endingSoon = computed(() => sortLots(active.value, 'ending').slice(0, 4))
-const newest = computed(() => sortLots(active.value, 'new').slice(0, 4))
-// число активных лотов по категориям и подкатегориям: { computers: 12, 'computers/laptops': 3, ... }
-const counts = computed(() => {
-  const result = {}
-  active.value.forEach((l) => {
-    result[l.category] = (result[l.category] || 0) + 1
-    const key = l.category + '/' + l.subcategory
-    result[key] = (result[key] || 0) + 1
-  })
-  return result
+const activeTotal = ref(0)
+const endingSoon = ref([])
+const newest = ref([])
+const loading = ref(true)
+const error = ref('')
+
+onMounted(async () => {
+  try {
+    // по умолчанию сервер отдаёт активные лоты, отсортированные по близости окончания
+    const [ending, fresh] = await Promise.all([api.lots(), api.lots({ sort: 'new' })])
+    activeTotal.value = ending.total
+    endingSoon.value = ending.lots.slice(0, 4)
+    newest.value = fresh.lots.slice(0, 4)
+  } catch (e) {
+    error.value = handleApiError(e)
+  } finally {
+    loading.value = false
+  }
 })
 
-function openRandom() {
-  const id = getRandomLotId()
-  if (id) router.push('/lots/' + id)
+const randomError = ref('')
+async function openRandom() {
+  randomError.value = ''
+  try {
+    const { id } = await api.randomLot()
+    if (id) router.push('/lots/' + id)
+  } catch (e) {
+    randomError.value = handleApiError(e)
+  }
 }
 </script>
 
@@ -39,19 +52,12 @@ function openRandom() {
         <router-link to="/create" class="button light">Создать лот</router-link>
         <button class="button ghost" @click="openRandom">Мне повезёт</button>
       </div>
+      <div v-if="randomError" class="error">{{ randomError }}</div>
     </div>
     <div class="hero-stats">
       <div class="stat">
-        <b>{{ active.length }}</b>
+        <b>{{ activeTotal }}</b>
         <span>активных лотов</span>
-      </div>
-      <div class="stat">
-        <b>{{ state.bids.length }}</b>
-        <span>ставок сделано</span>
-      </div>
-      <div class="stat">
-        <b>{{ state.users.length }}</b>
-        <span>участников</span>
       </div>
     </div>
   </section>
@@ -65,12 +71,11 @@ function openRandom() {
       <div v-for="cat in state.categories" :key="cat.id" class="cat-tile">
         <router-link :to="{ path: '/lots', query: { cat: cat.id } }" class="cat-tile-head">
           <span class="cat-tile-name">{{ cat.name }}</span>
-          <span class="cat-tile-count">{{ counts[cat.id] || 0 }}</span>
         </router-link>
         <ul class="cat-tile-subs">
           <li v-for="sub in cat.subs.slice(0, 4)" :key="sub.id">
             <router-link :to="{ path: '/lots', query: { cat: cat.id, sub: sub.id } }">
-              {{ sub.name }}<span>{{ counts[cat.id + '/' + sub.id] || 0 }}</span>
+              {{ sub.name }}
             </router-link>
           </li>
         </ul>
@@ -90,6 +95,8 @@ function openRandom() {
       <h2>Скоро завершатся</h2>
       <router-link to="/lots" class="link">Все →</router-link>
     </div>
+    <div v-if="loading" class="muted">Загрузка…</div>
+    <div v-if="error" class="error">{{ error }}</div>
     <div class="grid grid-4">
       <LotCard v-for="lot in endingSoon" :key="lot.id" :lot="lot" />
     </div>

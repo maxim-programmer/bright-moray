@@ -173,6 +173,8 @@ export function getBidsCount(lot) {
   return state.bids.filter((b) => b.lotId === lot.id).length
 }
 
+// Сервер отдаёт статус с учётом срока, но пока страница открыта, лот может истечь —
+// тогда показываем «завершён» сразу, не дожидаясь перезапроса.
 export function getStatus(lot) {
   if (lot.status === 'active' && lot.endsAt <= state.now) {
     return 'finished'
@@ -202,14 +204,15 @@ export function getStatusText(lot) {
   const status = getStatus(lot)
   if (status === 'active') return 'Активен'
   if (status === 'cancelled') return 'Отменён'
-  return hasBids(lot) ? 'Завершён — продан' : 'Завершён — не продан'
+  return lot.bidsCount > 0 ? 'Завершён — продан' : 'Завершён — не продан'
 }
 
+// Цену и число ставок не считаем — берём из полей лота
 export function getPriceText(lot) {
-  if (getStatus(lot) === 'finished' && !hasBids(lot)) {
+  if (getStatus(lot) === 'finished' && lot.bidsCount === 0) {
     return '—'
   }
-  return formatMoney(getCurrentPrice(lot))
+  return formatMoney(lot.currentPrice)
 }
 
 /* ---------- Каталог: фильтры, сортировка, страницы ---------- */
