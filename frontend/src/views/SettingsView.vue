@@ -3,7 +3,6 @@ import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   state,
-  getCurrentUser,
   updateProfile,
   changeUsername,
   changePassword,
@@ -12,39 +11,59 @@ import {
 } from '../store'
 
 const router = useRouter()
-const user = getCurrentUser()
 const current = computed(() => state.user)
+const user = state.user || {}
 
 // Личные данные
 const profile = reactive({ name: user.name || '', telegram: user.telegram || '', dormId: user.dormId || '' })
-const profileMsg = reactive({ error: '', done: '' })
-function saveProfile() {
-  profileMsg.done = ''
-  profileMsg.error = updateProfile(profile) || ''
-  if (!profileMsg.error) profileMsg.done = 'Данные сохранены'
+const profileMsg = reactive({ error: '', done: '', busy: false })
+async function saveProfile() {
+  if (profileMsg.busy) return
+  profileMsg.done = profileMsg.error = ''
+  profileMsg.busy = true
+  try {
+    await updateProfile(profile)
+    profileMsg.done = 'Данные сохранены'
+  } catch (e) {
+    profileMsg.error = handleApiError(e)
+  } finally {
+    profileMsg.busy = false
+  }
 }
 
 // Никнейм
 const newUsername = ref('')
-const usernameMsg = reactive({ error: '', done: '' })
-function saveUsername() {
-  usernameMsg.done = ''
-  usernameMsg.error = changeUsername(newUsername.value.trim()) || ''
-  if (!usernameMsg.error) {
+const usernameMsg = reactive({ error: '', done: '', busy: false })
+async function saveUsername() {
+  if (usernameMsg.busy) return
+  usernameMsg.done = usernameMsg.error = ''
+  usernameMsg.busy = true
+  try {
+    await changeUsername(newUsername.value.trim())
     usernameMsg.done = 'Никнейм изменён'
     newUsername.value = ''
+  } catch (e) {
+    usernameMsg.error = handleApiError(e)
+  } finally {
+    usernameMsg.busy = false
   }
 }
 
 // Пароль
 const password = reactive({ current: '', next: '', confirm: '' })
-const passwordMsg = reactive({ error: '', done: '' })
-function savePassword() {
-  passwordMsg.done = ''
-  passwordMsg.error = changePassword(password.current, password.next, password.confirm) || ''
-  if (!passwordMsg.error) {
+const passwordMsg = reactive({ error: '', done: '', busy: false })
+async function savePassword() {
+  if (passwordMsg.busy) return
+  passwordMsg.done = passwordMsg.error = ''
+  passwordMsg.busy = true
+  try {
+    await changePassword(password.current, password.next, password.confirm)
     passwordMsg.done = 'Пароль изменён'
     password.current = password.next = password.confirm = ''
+  } catch (e) {
+    passwordMsg.error = handleApiError(e)
+  } finally {
+    passwordMsg.busy = false
   }
 }
 
@@ -92,7 +111,7 @@ async function exit() {
         </label>
         <div v-if="profileMsg.error" class="error">{{ profileMsg.error }}</div>
         <div v-if="profileMsg.done" class="success">{{ profileMsg.done }}</div>
-        <button class="button" type="submit">Сохранить</button>
+        <button class="button" type="submit" :disabled="profileMsg.busy">Сохранить</button>
       </form>
 
       <form class="form settings-card" @submit.prevent="saveUsername">
@@ -104,7 +123,7 @@ async function exit() {
         </label>
         <div v-if="usernameMsg.error" class="error">{{ usernameMsg.error }}</div>
         <div v-if="usernameMsg.done" class="success">{{ usernameMsg.done }}</div>
-        <button class="button" type="submit">Сменить никнейм</button>
+        <button class="button" type="submit" :disabled="usernameMsg.busy">Сменить никнейм</button>
       </form>
 
       <form class="form settings-card" @submit.prevent="savePassword">
@@ -123,7 +142,7 @@ async function exit() {
         </label>
         <div v-if="passwordMsg.error" class="error">{{ passwordMsg.error }}</div>
         <div v-if="passwordMsg.done" class="success">{{ passwordMsg.done }}</div>
-        <button class="button" type="submit">Сменить пароль</button>
+        <button class="button" type="submit" :disabled="passwordMsg.busy">Сменить пароль</button>
       </form>
 
       <div class="settings-card danger-zone wide-card">
