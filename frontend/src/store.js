@@ -1,14 +1,10 @@
 import { reactive } from 'vue'
 import { api, ApiError } from './api'
-import { users, lots, bids } from './mock/data'
 
 export const state = reactive({
   user: null, // профиль из /auth/me; null — не вошли
   categories: [], // справочники грузятся один раз при старте
   dorms: [],
-  users: users,
-  lots: lots,
-  bids: bids,
   now: Date.now(), // серверное время, обновляется раз в секунду
   initError: ''
 })
@@ -92,7 +88,7 @@ export function handleApiError(error) {
   return error?.message || 'Ошибка сервера'
 }
 
-export const PAGE_SIZE = 20
+export const PAGE_SIZE = 20 // столько лотов сервер отдаёт на страницу каталога
 
 export const sortOptions = [
   { id: 'ending', name: 'Скоро завершатся' },
@@ -121,13 +117,6 @@ export function getSubcategory(categoryId, subId) {
   return category ? category.subs.find((s) => s.id === subId) : undefined
 }
 
-export function getCategoryLabel(lot) {
-  const category = getCategory(lot.category)
-  const sub = getSubcategory(lot.category, lot.subcategory)
-  if (!category) return ''
-  return sub ? category.name + ' · ' + sub.name : category.name
-}
-
 export function getDorm(id) {
   return state.dorms.find((d) => d.id === Number(id))
 }
@@ -137,41 +126,7 @@ export function getDormLabel(id) {
   return dorm ? dorm.name : '—'
 }
 
-/* ---------- Пользователи ---------- */
-
-export function getUser(id) {
-  return state.users.find((u) => u.id === id)
-}
-
-export function getUsername(id) {
-  const user = getUser(id)
-  return user ? user.username : '—'
-}
-
-export function getCurrentUser() {
-  return state.user
-}
-
-export function getLotDorm(lot) {
-  const author = getUser(lot.authorId)
-  return author ? getDorm(author.dormId) : undefined
-}
-
-/* ---------- Лоты и ставки ---------- */
-
-export function getLot(id) {
-  return state.lots.find((l) => l.id === Number(id))
-}
-
-export function getLotBids(lotId) {
-  return state.bids
-    .filter((b) => b.lotId === lotId)
-    .sort((a, b) => b.createdAt - a.createdAt)
-}
-
-export function getBidsCount(lot) {
-  return state.bids.filter((b) => b.lotId === lot.id).length
-}
+/* ---------- Лоты ---------- */
 
 // Сервер отдаёт статус с учётом срока, но пока страница открыта, лот может истечь —
 // тогда показываем «завершён» сразу, не дожидаясь перезапроса.
@@ -180,24 +135,6 @@ export function getStatus(lot) {
     return 'finished'
   }
   return lot.status
-}
-
-export function hasBids(lot) {
-  return getBidsCount(lot) > 0
-}
-
-export function getCurrentPrice(lot) {
-  const lotBids = getLotBids(lot.id)
-  return lotBids.length > 0 ? lotBids[0].amount : lot.startPrice
-}
-
-export function getLeaderId(lot) {
-  const lotBids = getLotBids(lot.id)
-  return lotBids.length > 0 ? lotBids[0].userId : null
-}
-
-export function getMinBid(lot) {
-  return getCurrentPrice(lot) + lot.step
 }
 
 export function getStatusText(lot) {
@@ -213,90 +150,6 @@ export function getPriceText(lot) {
     return '—'
   }
   return formatMoney(lot.currentPrice)
-}
-
-/* ---------- Каталог: фильтры, сортировка, страницы ---------- */
-
-// filters: { category, sub, q, status, priceMin, priceMax, dormId }
-export function filterLots(filters) {
-  const q = (filters.q || '').trim().toLowerCase()
-  const min = Number(filters.priceMin) || 0
-  const max = Number(filters.priceMax) || Infinity
-  const status = filters.status || 'active'
-
-  return state.lots.filter((lot) => {
-    const lotStatus = getStatus(lot)
-    if (status === 'active' && lotStatus !== 'active') return false
-    if (status === 'finished' && lotStatus !== 'finished') return false
-
-    if (filters.category && lot.category !== filters.category) return false
-    if (filters.sub && lot.subcategory !== filters.sub) return false
-
-    if (q && !lot.title.toLowerCase().includes(q) && !lot.description.toLowerCase().includes(q)) {
-      return false
-    }
-
-    const price = getCurrentPrice(lot)
-    if (price < min || price > max) return false
-
-    if (filters.dormId) {
-      const dorm = getLotDorm(lot)
-      if (!dorm || dorm.id !== Number(filters.dormId)) return false
-    }
-    return true
-  })
-}
-
-export function sortLots(list, sort) {
-  const result = [...list]
-  const byTitle = (a, b) => a.title.localeCompare(b.title, 'ru')
-  switch (sort) {
-    case 'new':
-      return result.sort((a, b) => b.createdAt - a.createdAt)
-    case 'price_asc':
-      return result.sort((a, b) => getCurrentPrice(a) - getCurrentPrice(b))
-    case 'price_desc':
-      return result.sort((a, b) => getCurrentPrice(b) - getCurrentPrice(a))
-    case 'title_asc':
-      return result.sort(byTitle)
-    case 'title_desc':
-      return result.sort((a, b) => byTitle(b, a))
-    case 'bids':
-      return result.sort((a, b) => getBidsCount(b) - getBidsCount(a))
-    case 'ending':
-    default: {
-      // активные — по близости окончания, завершённые и отменённые — в конце
-      const rank = (lot) => (getStatus(lot) === 'active' ? 0 : 1)
-      return result.sort((a, b) => rank(a) - rank(b) || a.endsAt - b.endsAt)
-    }
-  }
-}
-
-export function paginate(list, page) {
-  const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE))
-  const current = Math.min(Math.max(1, page), totalPages)
-  const start = (current - 1) * PAGE_SIZE
-  return { items: list.slice(start, start + PAGE_SIZE), page: current, totalPages }
-}
-
-// Похожие лоты: сначала активные из той же подкатегории, затем из той же категории
-export function getSimilarLots(lot, limit = 4) {
-  const others = getActiveLots().filter((l) => l.id !== lot.id)
-  const sameSub = others.filter((l) => l.category === lot.category && l.subcategory === lot.subcategory)
-  const sameCat = others.filter((l) => l.category === lot.category && l.subcategory !== lot.subcategory)
-  return [...sortLots(sameSub, 'ending'), ...sortLots(sameCat, 'ending')].slice(0, limit)
-}
-
-export function getActiveLots() {
-  return state.lots.filter((l) => getStatus(l) === 'active')
-}
-
-// Случайный активный лот: сначала из переданного списка, иначе из всех активных
-export function getRandomLotId(list) {
-  const fromList = (list || []).filter((l) => getStatus(l) === 'active')
-  const pool = fromList.length > 0 ? fromList : getActiveLots()
-  if (pool.length === 0) return null
-  return pool[Math.floor(Math.random() * pool.length)].id
 }
 
 /* ---------- Форматирование ---------- */
@@ -365,52 +218,6 @@ export async function logout() {
   state.user = null
 }
 
-/* ---------- Действия с лотами ---------- */
-
-export function createLot(data) {
-  const lot = {
-    id: Date.now(),
-    title: data.title,
-    description: data.description,
-    image: data.image,
-    category: data.category,
-    subcategory: data.subcategory,
-    authorId: state.user?.id,
-    startPrice: data.startPrice,
-    step: data.step,
-    createdAt: Date.now(),
-    endsAt: Date.now() + data.hours * 60 * 60 * 1000,
-    status: 'active'
-  }
-  state.lots.push(lot)
-  return lot.id
-}
-
-export function placeBid(lot, amount) {
-  if (!state.user?.id) return 'Войдите, чтобы делать ставки'
-  if (lot.authorId === state.user?.id) return 'Нельзя делать ставку на свой лот'
-  if (getStatus(lot) !== 'active') return 'Аукцион уже закрыт'
-  if (getLeaderId(lot) === state.user?.id) return 'Ваша ставка и так лидирует'
-  if (!amount || amount < getMinBid(lot)) {
-    return 'Минимальная ставка: ' + formatMoney(getMinBid(lot))
-  }
-  state.bids.push({
-    id: Date.now(),
-    lotId: lot.id,
-    userId: state.user?.id,
-    amount: amount,
-    createdAt: Date.now()
-  })
-  return null
-}
-
-export function cancelLot(lot) {
-  if (lot.authorId !== state.user?.id) return
-  if (getStatus(lot) !== 'active') return
-  if (hasBids(lot)) return
-  lot.status = 'cancelled'
-}
-
 /* ---------- Профиль и настройки ---------- */
 
 // Профиль меняет сервер; в стор кладём то, что он вернул
@@ -430,27 +237,6 @@ export async function changePassword(current, newPassword, confirm) {
   await api.changePassword({ current, newPassword, confirm })
 }
 
-export function getMyLots() {
-  return sortLots(
-    state.lots.filter((l) => l.authorId === state.user?.id),
-    'ending'
-  )
-}
-
-export function getMyBidLots() {
-  return sortLots(
-    state.lots.filter((l) =>
-      state.bids.some((b) => b.lotId === l.id && b.userId === state.user?.id)
-    ),
-    'ending'
-  )
-}
-
-export function getMyMaxBid(lot) {
-  const mine = state.bids.filter((b) => b.lotId === lot.id && b.userId === state.user?.id)
-  return mine.length > 0 ? Math.max(...mine.map((b) => b.amount)) : 0
-}
-
 // Положение пользователя в торгах по лоту — для «Моих ставок»
 export function getMyBidState(lot) {
   const leading = Boolean(state.user) && lot.leaderId === state.user.id
@@ -460,18 +246,4 @@ export function getMyBidState(lot) {
     return leading ? { text: 'Вы выиграли', kind: 'good' } : { text: 'Не выиграли', kind: 'neutral' }
   }
   return leading ? { text: 'Вы лидируете', kind: 'good' } : { text: 'Ставку перебили', kind: 'bad' }
-}
-
-export function getUserStats(userId) {
-  const created = state.lots.filter((l) => l.authorId === userId)
-  const participated = new Set(state.bids.filter((b) => b.userId === userId).map((b) => b.lotId))
-  const won = state.lots.filter((l) => getStatus(l) === 'finished' && getLeaderId(l) === userId)
-  const sold = created.filter((l) => getStatus(l) === 'finished' && hasBids(l))
-  return {
-    created: created.length,
-    participated: participated.size,
-    won: won.length,
-    rating: won.length + sold.length, // заглушка: +1 за каждую успешную сделку
-    complaints: 0
-  }
 }
