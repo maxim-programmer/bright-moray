@@ -1,37 +1,58 @@
 <script setup>
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import LotCard from '../components/LotCard.vue'
 import Pagination from '../components/Pagination.vue'
+import { api } from '../api'
 import {
   state,
   sortOptions,
   statusOptions,
   getCategory,
   getSubcategory,
-  filterLots,
-  sortLots,
-  paginate,
-  getRandomLotId,
+  handleApiError,
   PAGE_SIZE
 } from '../store'
 
 const route = useRoute()
 const router = useRouter()
 
+const statusIds = statusOptions.map((o) => o.id)
+const sortIds = sortOptions.map((o) => o.id)
+
 // Все фильтры живут в адресной строке: /lots?cat=computers&sub=laptops&sort=price_asc&page=2
 // Поэтому ссылку на подборку можно скопировать, а кнопка «Назад» работает.
+// Имена в адресе (cat, min, max, dorm) короче, чем в API, — маппим их в apiParams.
 const filters = computed(() => ({
   category: route.query.cat || '',
   sub: route.query.sub || '',
   q: route.query.q || '',
-  status: route.query.status || 'active',
+  // неизвестный статус сервер отклонит с 400, поэтому старые и битые ссылки сводим к «Активные»
+  status: statusIds.includes(route.query.status) ? route.query.status : 'active',
   priceMin: route.query.min || '',
   priceMax: route.query.max || '',
   dormId: route.query.dorm || ''
 }))
-const sort = computed(() => route.query.sort || 'ending')
+const sort = computed(() => (sortIds.includes(route.query.sort) ? route.query.sort : 'ending'))
 const pageNumber = computed(() => Number(route.query.page) || 1)
+
+// сервер ждёт целые числа; пустые значения api.js сам выкинет из query
+function toInt(value) {
+  const n = Math.floor(Number(value))
+  return Number.isFinite(n) && n > 0 ? n : ''
+}
+
+const apiParams = computed(() => ({
+  category: filters.value.category,
+  sub: filters.value.sub,
+  q: filters.value.q.trim(),
+  status: filters.value.status,
+  sort: sort.value,
+  priceMin: toInt(filters.value.priceMin),
+  priceMax: toInt(filters.value.priceMax),
+  dormId: toInt(filters.value.dormId),
+  page: pageNumber.value > 1 ? pageNumber.value : ''
+}))
 
 function updateQuery(patch, { push = false, keepPage = false } = {}) {
   const next = { ...route.query, ...patch }
@@ -72,25 +93,40 @@ watch(
     priceMax.value = max
   }
 )
+onUnmounted(() => clearTimeout(timer))
 
-/* --- Данные --- */
-const filtered = computed(() => sortLots(filterLots(filters.value), sort.value))
-const pageData = computed(() => paginate(filtered.value, pageNumber.value))
+/* --- Данные: фильтры, сортировку и страницы считает сервер --- */
+const result = ref({ lots: [], page: 1, totalPages: 1, total: 0 })
+const loading = ref(false)
+const error = ref('')
+let requestId = 0
 
-// количество лотов в категориях — с учётом всех фильтров, кроме самой категории
-const countsBase = computed(() => filterLots({ ...filters.value, category: '', sub: '' }))
-const counts = computed(() => {
-  const result = {}
-  for (const lot of countsBase.value) {
-    result[lot.category] = (result[lot.category] || 0) + 1
-    const key = lot.category + '/' + lot.subcategory
-    result[key] = (result[key] || 0) + 1
+async function load() {
+  // при быстрой смене фильтров ответы могут прийти не по порядку — берём только последний
+  const id = ++requestId
+  loading.value = true
+  error.value = ''
+  try {
+    const data = await api.lots(apiParams.value)
+    if (id === requestId) result.value = data
+  } catch (e) {
+    if (id === requestId) error.value = handleApiError(e)
+  } finally {
+    if (id === requestId) loading.value = false
   }
-  return result
-})
-function countFor(categoryId, subId) {
-  return counts.value[subId ? categoryId + '/' + subId : categoryId] || 0
 }
+
+watch(
+  () => JSON.stringify(apiParams.value),
+  () => {
+    // при уходе со страницы query тоже меняется — лишний запрос не нужен
+    if (route.path === '/lots') load()
+  },
+  { immediate: true }
+)
+onUnmounted(() => {
+  requestId++ // ответ, пришедший после ухода со страницы, игнорируем
+})
 
 const activeCategory = computed(() => getCategory(filters.value.category))
 const activeSub = computed(() => getSubcategory(filters.value.category, filters.value.sub))
@@ -143,10 +179,17 @@ function resetFilters() {
 }
 
 const noActiveLots = ref(false)
-function openRandom() {
-  const id = getRandomLotId(filtered.value)
-  if (id) router.push('/lots/' + id)
-  else noActiveLots.value = true
+const randomError = ref('')
+async function openRandom() {
+  noActiveLots.value = false
+  randomError.value = ''
+  try {
+    const { id } = await api.randomLot({ category: filters.value.category, sub: filters.value.sub })
+    if (id) router.push('/lots/' + id)
+    else noActiveLots.value = true
+  } catch (e) {
+    randomError.value = handleApiError(e)
+  }
 }
 
 // На узких экранах боковые колонки сворачиваются в выезжающие панели
@@ -170,7 +213,6 @@ const showFilters = ref(false)
           <div class="cat-row">
             <button class="cat-item" :class="{ selected: !filters.category }" @click="selectCategory('')">
               <span class="cat-name">Все категории</span>
-              <span class="cat-count">{{ countsBase.length }}</span>
             </button>
           </div>
         </li>
@@ -180,13 +222,11 @@ const showFilters = ref(false)
               class="cat-item"
               :class="{
                 selected: filters.category === cat.id && !filters.sub,
-                'in-path': filters.category === cat.id && filters.sub,
-                empty: countFor(cat.id) === 0
+                'in-path': filters.category === cat.id && filters.sub
               }"
               @click="selectCategory(cat.id)"
             >
               <span class="cat-name">{{ cat.name }}</span>
-              <span class="cat-count">{{ countFor(cat.id) }}</span>
             </button>
             <button
               class="cat-toggle"
@@ -204,11 +244,10 @@ const showFilters = ref(false)
             <li v-for="sub in cat.subs" :key="sub.id">
               <button
                 class="sub-item"
-                :class="{ selected: filters.category === cat.id && filters.sub === sub.id, empty: countFor(cat.id, sub.id) === 0 }"
+                :class="{ selected: filters.category === cat.id && filters.sub === sub.id }"
                 @click="selectCategory(cat.id, sub.id)"
               >
                 <span>{{ sub.name }}</span>
-                <span class="cat-count">{{ countFor(cat.id, sub.id) }}</span>
               </button>
             </li>
           </ul>
@@ -234,9 +273,9 @@ const showFilters = ref(false)
           <h1>{{ title }}</h1>
           <p v-if="activeCategory && !activeSub" class="cat-description">{{ activeCategory.description }}</p>
           <div class="muted">
-            Найдено: {{ filtered.length }}
-            <template v-if="pageData.totalPages > 1">
-              · страница {{ pageData.page }} из {{ pageData.totalPages }} · по {{ PAGE_SIZE }} на странице
+            Найдено: {{ result.total }}
+            <template v-if="result.totalPages > 1">
+              · страница {{ result.page }} из {{ result.totalPages }} · по {{ PAGE_SIZE }} на странице
             </template>
           </div>
         </div>
@@ -250,17 +289,16 @@ const showFilters = ref(false)
       <div class="chips">
         <template v-if="activeCategory">
           <button class="chip" :class="{ selected: !filters.sub }" @click="selectCategory(activeCategory.id)">
-            Все в разделе <span>{{ countFor(activeCategory.id) }}</span>
+            Все в разделе
           </button>
           <button
             v-for="sub in activeCategory.subs"
             :key="sub.id"
             class="chip"
             :class="{ selected: filters.sub === sub.id }"
-            :disabled="countFor(activeCategory.id, sub.id) === 0 && filters.sub !== sub.id"
             @click="selectCategory(activeCategory.id, sub.id)"
           >
-            {{ sub.name }} <span>{{ countFor(activeCategory.id, sub.id) }}</span>
+            {{ sub.name }}
           </button>
         </template>
         <template v-else>
@@ -268,24 +306,26 @@ const showFilters = ref(false)
             v-for="cat in state.categories"
             :key="cat.id"
             class="chip"
-            :disabled="countFor(cat.id) === 0"
             @click="selectCategory(cat.id)"
           >
-            {{ cat.name }} <span>{{ countFor(cat.id) }}</span>
+            {{ cat.name }}
           </button>
         </template>
       </div>
 
-      <div v-if="filtered.length === 0" class="empty">
+      <div v-if="loading" class="muted">Загрузка…</div>
+      <div v-if="error" class="error">{{ error }}</div>
+
+      <div v-if="!loading && !error && result.lots.length === 0" class="empty">
         <p>По вашему запросу ничего не нашлось.</p>
         <button class="button light" @click="resetFilters">Сбросить фильтры</button>
       </div>
 
-      <div v-else class="grid">
-        <LotCard v-for="lot in pageData.items" :key="lot.id" :lot="lot" />
+      <div v-else-if="result.lots.length" class="grid">
+        <LotCard v-for="lot in result.lots" :key="lot.id" :lot="lot" />
       </div>
 
-      <Pagination :page="pageData.page" :total-pages="pageData.totalPages" @change="changePage" />
+      <Pagination :page="result.page" :total-pages="result.totalPages" @change="changePage" />
     </section>
 
     <!-- ===== Правая колонка: фильтры, сортировка, случайный лот ===== -->
@@ -299,6 +339,7 @@ const showFilters = ref(false)
         {{ activeCategory ? 'Случайный лот в разделе' : 'Случайный лот' }}
       </button>
       <div v-if="noActiveLots" class="muted small">Активных лотов пока нет</div>
+      <div v-if="randomError" class="error">{{ randomError }}</div>
 
       <label class="field">
         Поиск
@@ -354,7 +395,7 @@ const showFilters = ref(false)
         Сбросить фильтры
       </button>
       <button class="button small mobile-only" @click="showFilters = false">
-        Показать {{ filtered.length }}
+        Показать {{ result.total }}
       </button>
     </aside>
 
