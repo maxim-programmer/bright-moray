@@ -48,7 +48,7 @@
 step, currentPrice, minBid, bidsCount, leaderId|null, myMaxBid, createdAt, endsAt, status, contact? }`
 
 * `status`: `active | finished | cancelled` (уже с учётом `endsAt`).
-* `currentPrice` — лидирующая ставка или `startPrice`; `minBid = currentPrice + step`.
+* `currentPrice` — лидирующая ставка или `startPrice`; `minBid` — `startPrice`, пока ставок нет (первая ставка может равняться стартовой цене), далее `currentPrice + step`.
 * `dormId` — общежитие продавца. `myMaxBid` = 0 для анонима или если ставок нет.
 * `contact = { role, name, telegram }` — **только** продавцу и победителю завершённого лота со ставками
   (`role`: «Победитель» / «Продавец»). Остальным поля нет.

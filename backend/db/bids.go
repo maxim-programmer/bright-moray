@@ -81,7 +81,9 @@ func (q *Queries) PlaceBid(ctx context.Context, lotID, userID int64, amount int)
 		return bid, model.Errf(409, "lot_closed", "Аукцион уже закрыт")
 	}
 
-	current := startPrice
+	// Первая ставка может быть равна стартовой цене (без шага);
+	// каждая следующая — не меньше текущей цены + шаг.
+	minBid := startPrice
 	var topUser, topAmount int64
 	err = tx.QueryRowContext(ctx,
 		`SELECT user_id, amount FROM bids WHERE lot_id = $1 ORDER BY amount DESC, id ASC LIMIT 1`, lotID).
@@ -91,13 +93,12 @@ func (q *Queries) PlaceBid(ctx context.Context, lotID, userID int64, amount int)
 	case err != nil:
 		return bid, err
 	default:
-		current = int(topAmount)
+		minBid = int(topAmount) + step
 		if topUser == userID {
 			return bid, model.Errf(409, "already_leading", "Ваша ставка и так лидирует")
 		}
 	}
 
-	minBid := current + step
 	if amount < minBid {
 		return bid, model.Errf(400, "bid_too_low", "Минимальная ставка: %s", formatRub(minBid))
 	}

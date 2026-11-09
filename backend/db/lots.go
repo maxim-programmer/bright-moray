@@ -52,7 +52,12 @@ func scanLot(row interface{ Scan(...any) error }) (model.Lot, error) {
 		id := leader.Int64
 		l.LeaderID = &id
 	}
-	l.MinBid = l.CurrentPrice + l.Step
+	// первая ставка может быть равна стартовой цене, дальше — цена + шаг
+	if l.BidsCount > 0 {
+		l.MinBid = l.CurrentPrice + l.Step
+	} else {
+		l.MinBid = l.StartPrice
+	}
 	l.CreatedAt = ms(created)
 	l.EndsAt = ms(ends)
 	return l, nil
