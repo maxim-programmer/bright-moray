@@ -29,6 +29,9 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
       JWT_SECRET: ${JWT_SECRET:?задайте JWT_SECRET в .env (не короче 16 символов)}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ANTI_SNIPE_WINDOW_SEC: ${ANTI_SNIPE_WINDOW_SEC:-120}
+      ANTI_SNIPE_EXTEND_SEC: ${ANTI_SNIPE_EXTEND_SEC:-120}
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-}
       UPLOAD_DIR: /data/uploads
     volumes:
       - uploads_data:/data/uploads
