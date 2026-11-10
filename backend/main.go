@@ -1,6 +1,9 @@
 package main
 
 import (
+	"auction/config"
+	"auction/db"
+	"auction/handler"
 	"context"
 	"database/sql"
 	"errors"
@@ -13,10 +16,6 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-
-	"auction/config"
-	"auction/db"
-	"auction/handler"
 )
 
 func main() {
@@ -44,8 +43,16 @@ func main() {
 		log.Fatalf("Папка загрузок: %v", err)
 	}
 
+	h := handler.New(q, cfg)
+	liveCtx, liveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := h.StartLive(liveCtx); err != nil {
+		liveCancel()
+		log.Fatalf("Реалтайм: %v", err)
+	}
+	liveCancel()
+
 	mux := http.NewServeMux()
-	handler.SetupRoutes(mux, handler.New(q, cfg))
+	handler.SetupRoutes(mux, h)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -66,6 +73,9 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+
+	// WebSocket-соединения «угнаны» у net/http и Shutdown их не видит — закрываем сами
+	h.StopLive()
 
 	shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()

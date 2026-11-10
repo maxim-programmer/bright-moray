@@ -1,6 +1,12 @@
 package handler
 
 import (
+	"auction/auth"
+	"auction/config"
+	"auction/db"
+	"auction/live"
+	"auction/model"
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,11 +17,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-
-	"auction/auth"
-	"auction/config"
-	"auction/db"
-	"auction/model"
 )
 
 const (
@@ -29,6 +30,7 @@ type Handler struct {
 	cfg       config.Config
 	secret    []byte
 	loginRate *limiter
+	hub       *live.Hub // WebSocket-рассылка, таймеры завершения, Anti-snipe
 	// хеш-пустышка: сравниваем с ним, когда пользователь не найден,
 	// чтобы время ответа не выдавало существование никнейма
 	dummyHash []byte
@@ -40,9 +42,20 @@ func New(q *db.Queries, cfg config.Config) *Handler {
 		cfg:       cfg,
 		secret:    []byte(cfg.JWTSecret),
 		loginRate: newLimiter(10, 5*time.Minute),
+		hub: live.New(q, live.Options{
+			AntiSnipe:      db.AntiSnipe{Window: cfg.AntiSnipeWindow, Extend: cfg.AntiSnipeExtend},
+			AllowedOrigins: cfg.WSAllowedOrigins,
+		}),
 		dummyHash: mustHash("dummy-password"),
 	}
 }
+
+// StartLive запускает реалтайм-часть: ставит таймеры завершения на активные лоты.
+// Вызывать один раз при старте, после миграций.
+func (h *Handler) StartLive(ctx context.Context) error { return h.hub.Start(ctx) }
+
+// StopLive закрывает WebSocket-соединения и останавливает таймеры (при остановке сервера).
+func (h *Handler) StopLive() { h.hub.Shutdown() }
 
 /* ---------- ответы ---------- */
 
@@ -206,6 +219,19 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap позволяет http.ResponseController добраться до настоящего ResponseWriter.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// Hijack нужен для апгрейда до WebSocket: без него обёртка скрывала бы http.Hijacker.
+// В лог при этом попадает 101, а не 200.
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := http.NewResponseController(s.ResponseWriter).Hijack()
+	if err == nil {
+		s.status = http.StatusSwitchingProtocols
+	}
+	return conn, rw, err
+}
+
 // Middleware: восстановление после паники, лог запросов, базовые заголовки безопасности.
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -230,6 +256,7 @@ func Middleware(next http.Handler) http.Handler {
 func SetupRoutes(mux *http.ServeMux, h *Handler) {
 	mux.HandleFunc("GET /health", h.Health)
 	mux.HandleFunc("GET /api/time", h.ServerTime)
+	mux.HandleFunc("GET /api/ws", h.WS)
 
 	mux.HandleFunc("POST /api/auth/register", h.Register)
 	mux.HandleFunc("POST /api/auth/login", h.Login)

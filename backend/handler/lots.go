@@ -1,15 +1,15 @@
 package handler
 
 import (
+	"auction/db"
+	"auction/model"
 	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
-
-	"auction/db"
-	"auction/model"
 )
 
 const (
@@ -135,6 +135,7 @@ func (h *Handler) CreateLot(w http.ResponseWriter, r *http.Request, uid int64) {
 		fail(w, err)
 		return
 	}
+	h.hub.LotCreated(lot.ID, time.UnixMilli(lot.EndsAt)) // таймер завершения аукциона
 	writeJSON(w, http.StatusCreated, lot)
 }
 
@@ -162,7 +163,7 @@ func (h *Handler) CancelLot(w http.ResponseWriter, r *http.Request, uid int64) {
 		writeError(w, http.StatusNotFound, "not_found", "Лот не найден")
 		return
 	}
-	if err := h.q.CancelLot(r.Context(), id, uid); err != nil {
+	if err := h.hub.CancelLot(r.Context(), id, uid); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "Лот не найден")
 			return
@@ -272,7 +273,7 @@ func (h *Handler) PlaceBid(w http.ResponseWriter, r *http.Request, uid int64) {
 		writeError(w, http.StatusBadRequest, "validation", "Укажите сумму ставки")
 		return
 	}
-	bid, err := h.q.PlaceBid(r.Context(), id, uid, req.Amount)
+	placed, err := h.hub.PlaceBid(r.Context(), id, uid, req.Amount)
 	if errors.Is(err, db.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "Лот не найден")
 		return
@@ -286,5 +287,6 @@ func (h *Handler) PlaceBid(w http.ResponseWriter, r *http.Request, uid int64) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"bid": bid, "lot": lot})
+	// extended = true: ставка сработала как Anti-snipe, lot.endsAt уже продлён
+	writeJSON(w, http.StatusCreated, map[string]any{"bid": placed.Bid, "lot": lot, "extended": placed.Extended})
 }
