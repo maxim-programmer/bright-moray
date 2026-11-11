@@ -3,9 +3,9 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import LotCard from '../components/LotCard.vue'
 import { api } from '../api'
+import { realtime, subscribeLot } from '../realtime'
 import {
   state,
-  getStatus,
   getStatusText,
   getCategory,
   getSubcategory,
@@ -16,7 +16,24 @@ import {
   handleApiError
 } from '../store'
 
-const REFRESH_MS = 15000
+const REFRESH_MS = 15000 // резервный поллинг, пока сокет не подключён
+const FINISH_WAIT_MS = 2500 // столько ждём lot_finished после нуля, потом спрашиваем REST
+const NOTICE_MS = 6000
+
+const TERMINAL = ['finished', 'cancelled']
+// Поля публичного состояния лота, которые приходят в WebSocket-событиях
+const LIVE_FIELDS = ['currentPrice', 'minBid', 'bidsCount', 'leaderId', 'endsAt', 'status']
+
+// Тексты ошибок ставки по коду сервера; для остальных кодов — текст сервера
+const BID_ERRORS = {
+  bid_too_low: 'Ставка меньше минимальной — цена могла уже вырасти.',
+  already_leading: 'Ваша ставка и так лидирует.',
+  lot_closed: 'Аукцион уже завершён, ставки не принимаются.',
+  own_lot: 'Нельзя ставить на собственный лот.',
+  validation: 'Введите сумму ставки целым числом.',
+  rate_limited: 'Слишком много запросов, попробуйте через пару секунд.',
+  network: 'Нет связи с сервером, ставка не отправлена.'
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -33,7 +50,19 @@ const busy = ref(false)
 const category = computed(() => (lot.value ? getCategory(lot.value.category) : null))
 const sub = computed(() => (lot.value ? getSubcategory(lot.value.category, lot.value.subcategory) : null))
 const dorm = computed(() => (lot.value ? getDorm(lot.value.dormId) : null))
-const status = computed(() => (lot.value ? getStatus(lot.value) : ''))
+const notice = ref(null) // { text, kind } — «Время продлено», «Вашу ставку перебили»
+// Статус берём только с сервера: по нулю таймера лот локально не завершаем, ждём lot_finished
+const status = computed(() => (lot.value ? lot.value.status : ''))
+// Время вышло, а итог от сервера ещё не пришёл
+const awaitingResult = computed(() => status.value === 'active' && lot.value.endsAt <= state.now)
+const antiSnipeHint = computed(() => {
+  const a = realtime.antiSnipe
+  if (!a || !a.enabled || !a.windowMs || !a.extendMs) return ''
+  return (
+    `Anti-snipe: ставка в последние ${formatDuration(a.windowMs)} продлевает аукцион ` +
+    `на ${formatDuration(a.extendMs)} от момента ставки.`
+  )
+})
 const hasBids = computed(() => lot.value && lot.value.bidsCount > 0)
 const isOwner = computed(() => state.user && lot.value && lot.value.authorId === state.user.id)
 const isLeader = computed(() => state.user && lot.value && lot.value.leaderId === state.user.id)
@@ -44,18 +73,88 @@ const leaderName = computed(() => {
   return bid ? bid.username : '—'
 })
 
+function formatDuration(ms) {
+  const seconds = Math.round(ms / 1000)
+  if (seconds % 60 === 0) return seconds / 60 + ' мин'
+  return seconds + ' с'
+}
+
+/* --- Уведомления --- */
+
+let noticeTimer = null
+function showNotice(text, kind) {
+  notice.value = { text, kind }
+  clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => (notice.value = null), NOTICE_MS)
+}
+
+function notifyExtended(endsAt) {
+  showNotice('Время продлено до ' + new Date(endsAt).toLocaleTimeString('ru-RU'), 'info')
+}
+
+/* --- Слияние состояния лота --- */
+
+// Единые правила для REST-ответов и WebSocket-событий:
+// * более старое состояние (bidsCount меньше локального) не применяем;
+// * завершённый или отменённый лот обратно в «активный» не откатываем.
+function applyLot(next, { full = false } = {}) {
+  const current = lot.value
+  if (!current) {
+    if (full) lot.value = next
+    return
+  }
+  if (next.bidsCount < current.bidsCount) {
+    // устарело по ставкам, но поля, зависящие от зрителя (contact, myMaxBid), из полного ответа берём
+    if (full) lot.value = { ...current, contact: next.contact, myMaxBid: Math.max(current.myMaxBid || 0, next.myMaxBid || 0) }
+    return
+  }
+  const prevLeader = current.leaderId
+  const merged = full ? { ...current, ...next } : { ...current }
+  if (!full) for (const key of LIVE_FIELDS) if (key in next) merged[key] = next[key]
+  if (TERMINAL.includes(current.status) && !TERMINAL.includes(merged.status)) {
+    merged.status = current.status
+  }
+  lot.value = merged
+
+  // «Вашу ставку перебили»
+  const me = state.user?.id
+  if (me && prevLeader === me && merged.leaderId !== me && merged.status === 'active') {
+    showNotice('Вашу ставку перебили! Новая цена — ' + formatMoney(merged.currentPrice), 'bad')
+  }
+}
+
+function addBid(bid) {
+  if (!bid || bids.value.some((b) => b.id === bid.id)) return
+  bids.value = sortBids([bid, ...bids.value])
+}
+
+function sortBids(list) {
+  return list.sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
+}
+
 /* --- Загрузка --- */
 
-// Ответы могут прийти не по порядку (перезапрос по таймеру и ответ на ставку) —
-// применяем только самый свежий
+// Ответы REST могут прийти не по порядку (поллинг, ответ на ставку) — применяем только самый свежий
 let version = 0
+let alive = true
 
 async function refresh() {
   const id = ++version
   const [lotData, bidsData] = await Promise.all([api.lot(route.params.id), api.bids(route.params.id)])
-  if (id !== version) return
-  lot.value = lotData
-  bids.value = bidsData
+  if (id !== version || !alive) return
+  applyLot(lotData, { full: true })
+  // объединяем с тем, что уже пришло по сокету, без дублей
+  const known = new Map(bidsData.map((b) => [b.id, b]))
+  for (const b of bids.value) if (!known.has(b.id)) known.set(b.id, b)
+  bids.value = sortBids([...known.values()])
+}
+
+async function refreshBids() {
+  const list = await api.bids(route.params.id)
+  if (!alive) return
+  const known = new Map(list.map((b) => [b.id, b]))
+  for (const b of bids.value) if (!known.has(b.id)) known.set(b.id, b)
+  bids.value = sortBids([...known.values()])
 }
 
 async function load() {
@@ -69,6 +168,8 @@ async function load() {
   } finally {
     loading.value = false
   }
+  // подписываемся после первой загрузки: snapshot придёт поверх REST-данных и закроет промежуток
+  if (alive) unsubscribe = subscribeLot(lot.value.id, onLiveMessage)
   // похожие лоты не критичны: если не загрузились — просто не показываем блок
   api.similarLots(route.params.id).then(
     (list) => (similar.value = list),
@@ -76,42 +177,93 @@ async function load() {
   )
 }
 
-// Пока лот активен, раз в 15 секунд подтягиваем цену и ставки
-let timer = null
+/* --- Реалтайм --- */
+
+let unsubscribe = null
+
+function onLiveMessage(message) {
+  if (!lot.value) return
+  switch (message.type) {
+    case 'snapshot':
+      applyLot(message.lot)
+      // пока сокет лежал, могли пройти ставки — события не повторяются, историю берём из REST
+      if (bids.value.length < lot.value.bidsCount) refreshBids().catch(() => {})
+      break
+    case 'bid':
+    case 'bid_ok':
+      if (message.lot) applyLot(message.lot)
+      addBid(message.bid)
+      if (message.extended && message.lot) notifyExtended(message.lot.endsAt)
+      break
+    case 'lot_finished':
+      applyLot(message.lot)
+      // контакты победителя и продавца в событие не попадают — берём полный лот
+      refresh().catch(() => {})
+      break
+    case 'lot_cancelled':
+      applyLot(message.lot)
+      break
+    case 'error':
+      if (message.code === 'not_found') notFound.value = true
+      break
+  }
+}
+
+// Резервный режим: пока сокет не подключён, раз в 15 секунд подтягиваем цену и ставки
+let pollTimer = null
 onMounted(() => {
   load()
-  timer = setInterval(() => {
-    if (lot.value && lot.value.status === 'active' && !document.hidden) refresh().catch(() => {})
+  pollTimer = setInterval(() => {
+    if (realtime.connected || document.hidden) return
+    if (lot.value && lot.value.status === 'active') refresh().catch(() => {})
   }, REFRESH_MS)
 })
 onUnmounted(() => {
-  clearInterval(timer)
+  alive = false
+  clearInterval(pollTimer)
+  clearTimeout(finishTimer)
+  clearTimeout(noticeTimer)
+  if (unsubscribe) unsubscribe()
   version++ // запоздавшие ответы после ухода со страницы не нужны
 })
 
-// Срок вышел, пока страница открыта: локально уже показываем «завершён», а итог берём с сервера
-watch(
-  () => lot.value && lot.value.status === 'active' && status.value === 'finished',
-  (expired) => {
-    if (expired) refresh().catch(() => {})
-  }
-)
+// Таймер дошёл до нуля: лот локально не завершаем, ждём lot_finished.
+// Если его нет FINISH_WAIT_MS — спрашиваем сервер сами (и повторяем, пока итог не придёт).
+let finishTimer = null
+function scheduleFinishCheck() {
+  clearTimeout(finishTimer)
+  finishTimer = setTimeout(async () => {
+    if (!alive || !awaitingResult.value) return
+    await refresh().catch(() => {})
+    if (awaitingResult.value) scheduleFinishCheck()
+  }, FINISH_WAIT_MS)
+}
+watch(awaitingResult, (waiting) => {
+  if (waiting) scheduleFinishCheck()
+  else clearTimeout(finishTimer)
+})
 
 /* --- Действия --- */
+
+function bidErrorText(e) {
+  if (e?.code === 'unauthorized') return handleApiError(e)
+  return BID_ERRORS[e?.code] || handleApiError(e)
+}
 
 async function submitBid() {
   if (busy.value) return
   error.value = ''
   busy.value = true
   try {
-    // все проверки делает сервер; его текст ошибки показываем как есть
+    // ставим через REST: все проверки делает сервер, событие bid разойдётся по сокету всем
     const res = await api.placeBid(lot.value.id, Number(amount.value))
     version++
-    lot.value = res.lot
-    bids.value = [res.bid, ...bids.value.filter((b) => b.id !== res.bid.id)]
+    applyLot(res.lot, { full: true }) // полный Lot: обновится и myMaxBid
+    addBid(res.bid)
+    if (res.extended) notifyExtended(res.lot.endsAt)
     amount.value = ''
   } catch (e) {
-    error.value = handleApiError(e)
+    error.value = bidErrorText(e)
     // цена или статус могли измениться — подтягиваем актуальное состояние
     if (e.status !== 401) refresh().catch(() => {})
   } finally {
@@ -224,9 +376,13 @@ async function openRandom() {
             <b>{{ lot.leaderId ? leaderName : 'ставок пока нет' }}</b>
             <span v-if="isLeader" class="pill good">это вы</span>
           </p>
-          <div class="timer"><span class="muted">До конца:</span> {{ formatTimeLeft(lot.endsAt) }}</div>
+          <div v-if="awaitingResult" class="timer">Время вышло — подводим итоги…</div>
+          <div v-else class="timer"><span class="muted">До конца:</span> {{ formatTimeLeft(lot.endsAt) }}</div>
 
-          <div v-if="!state.user" class="muted">
+          <div v-if="notice" class="live-notice" :class="notice.kind" role="status">{{ notice.text }}</div>
+
+          <div v-if="awaitingResult" class="muted">Ставки больше не принимаются.</div>
+          <div v-else-if="!state.user" class="muted">
             Чтобы сделать ставку,
             <router-link :to="{ path: '/login', query: { redirect: route.fullPath } }"><b>войдите</b></router-link>.
           </div>
@@ -244,8 +400,9 @@ async function openRandom() {
             </button>
           </template>
           <div v-if="error" class="error bid-error">{{ error }}</div>
+          <p v-if="antiSnipeHint && !awaitingResult" class="muted small anti-snipe">{{ antiSnipeHint }}</p>
 
-          <div v-if="isOwner && !hasBids" class="cancel-row">
+          <div v-if="isOwner && !hasBids && !awaitingResult" class="cancel-row">
             <button class="button light small" :disabled="busy" @click="cancel">Отменить аукцион</button>
           </div>
         </div>

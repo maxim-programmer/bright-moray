@@ -7,7 +7,9 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8080',
+      // ws: true — иначе апгрейд до WebSocket на /api/ws в dev не пройдёт.
+      // changeOrigin не включаем: бэкенд сверяет Origin с Host запроса.
+      '/api': { target: 'http://localhost:8080', ws: true },
       '/uploads': 'http://localhost:8080'
     }
   }

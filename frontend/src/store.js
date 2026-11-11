@@ -27,6 +27,14 @@ async function syncTime() {
   state.now = serverNow()
 }
 
+// Поправка по серверному времени из WebSocket-сообщения (hello.now). Задержку доставки
+// одного сообщения не знаем, поэтому это грубее, чем syncTime(), но не требует запроса.
+export function setServerTime(now) {
+  if (typeof now !== 'number' || !Number.isFinite(now)) return
+  timeOffset = now - Date.now()
+  state.now = serverNow()
+}
+
 setInterval(() => {
   state.now = serverNow()
 }, 1000)

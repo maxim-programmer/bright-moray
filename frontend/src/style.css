@@ -1550,3 +1550,25 @@ textarea {
     font-size: 14px;
   }
 }
+
+/* ================= Реалтайм-уведомления на странице лота ================= */
+
+.live-notice {
+  margin: -6px 0 16px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 700;
+  background: var(--light);
+  color: var(--main);
+}
+
+.live-notice.bad {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.anti-snipe {
+  margin: 14px 0 0;
+  font-size: 13px;
+}
