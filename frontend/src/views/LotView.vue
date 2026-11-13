@@ -60,7 +60,7 @@ const antiSnipeHint = computed(() => {
   if (!a || !a.enabled || !a.windowMs || !a.extendMs) return ''
   return (
     `Anti-snipe: ставка в последние ${formatDuration(a.windowMs)} продлевает аукцион ` +
-    `на ${formatDuration(a.extendMs)} от момента ставки.`
+    `на ${formatDuration(a.extendMs)}.`
   )
 })
 const hasBids = computed(() => lot.value && lot.value.bidsCount > 0)
