@@ -140,7 +140,7 @@ func (q *Queries) PlaceBid(ctx context.Context, lotID, userID int64, amount int,
 	// Anti-snipe: ставка в последние Window секунд переносит конец аукциона.
 	left := endsAt.Sub(dbNow)
 	if as.Enabled() && left <= as.Window {
-		if newEnds := dbNow.Add(as.Extend); newEnds.After(endsAt) {
+		if newEnds := endsAt.Add(as.Extend); newEnds.After(endsAt) {
 			if _, err := tx.ExecContext(ctx, `UPDATE lots SET ends_at = $2 WHERE id = $1`, lotID, newEnds); err != nil {
 				return res, mapErr(err)
 			}
