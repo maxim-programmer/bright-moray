@@ -46,13 +46,26 @@ func (q *Queries) ChangeUsername(ctx context.Context, id int64, newUsername stri
 		`UPDATE users SET username = $1 WHERE id = $2 RETURNING `+userCols, newUsername, id))
 }
 
+// ChangePassword меняет хеш пароля и в той же транзакции отзывает все сессии пользователя:
+// украденный refresh-токен не должен пережить смену пароля.
 func (q *Queries) ChangePassword(ctx context.Context, id int64, passwordHash string) error {
-	res, err := q.db.ExecContext(ctx, `UPDATE users SET password = $1 WHERE id = $2`, passwordHash, id)
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `UPDATE users SET password = $1 WHERE id = $2`, passwordHash, id)
 	if err != nil {
 		return mapErr(err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE refresh_tokens SET revoked_at = clock_timestamp(), revoked_reason = $2
+		WHERE user_id = $1 AND revoked_at IS NULL`, id, RevokePasswordChange); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
