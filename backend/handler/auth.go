@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -115,7 +116,10 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	h.setSession(w, user.ID)
+	if err := h.startSession(w, r, user.ID); err != nil {
+		fail(w, err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, user)
 }
 
@@ -151,19 +155,17 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.loginRate.reset(ip)
-	h.setSession(w, user.ID)
+	if err := h.startSession(w, r, user.ID); err != nil {
+		fail(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, user)
-}
-
-func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
-	h.clearSession(w)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request, uid int64) {
 	user, err := h.q.GetUserByID(r.Context(), uid)
 	if errors.Is(err, db.ErrNotFound) { // пользователь удалён, а токен ещё жив
-		h.clearSession(w)
+		h.clearAuthCookies(w)
 		writeError(w, http.StatusUnauthorized, "unauthorized", "Войдите в аккаунт")
 		return
 	}
@@ -277,9 +279,16 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request, uid int
 		fail(w, err)
 		return
 	}
+	// Все сессии пользователя (на всех устройствах) отзываются в той же транзакции.
 	if err := h.q.ChangePassword(r.Context(), uid, string(hash)); err != nil {
 		fail(w, err)
 		return
+	}
+	// Это устройство остаётся в аккаунте: ему сразу открывается новая сессия.
+	// Если не получилось — просто стираем cookie, и пользователь войдёт с новым паролем.
+	if err := h.startSession(w, r, uid); err != nil {
+		log.Printf("auth: сессия после смены пароля: %v", err)
+		h.clearAuthCookies(w)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

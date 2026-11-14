@@ -19,16 +19,12 @@ import (
 	"time"
 )
 
-const (
-	sessionCookie = "session"
-	sessionTTL    = 7 * 24 * time.Hour
-	maxJSONBody   = 1 << 20
-)
+const maxJSONBody = 1 << 20
 
 type Handler struct {
 	q         *db.Queries
 	cfg       config.Config
-	secret    []byte
+	jwt       *auth.JWT // access-токены
 	loginRate *limiter
 	hub       *live.Hub // WebSocket-рассылка, таймеры завершения, Anti-snipe
 	// хеш-пустышка: сравниваем с ним, когда пользователь не найден,
@@ -37,10 +33,20 @@ type Handler struct {
 }
 
 func New(q *db.Queries, cfg config.Config) *Handler {
+	cfg.ApplyDefaults()
+	jwt, err := auth.NewJWT(auth.Options{
+		Secret:   []byte(cfg.JWTSecret),
+		Issuer:   cfg.JWTIssuer,
+		Audience: cfg.JWTAudience,
+		TTL:      cfg.AccessTokenTTL,
+	})
+	if err != nil { // конфигурация проверяется в config.Load; сюда попадаем только при ошибке сборки
+		panic(err)
+	}
 	return &Handler{
 		q:         q,
 		cfg:       cfg,
-		secret:    []byte(cfg.JWTSecret),
+		jwt:       jwt,
 		loginRate: newLimiter(10, 5*time.Minute),
 		hub: live.New(q, live.Options{
 			AntiSnipe:      db.AntiSnipe{Window: cfg.AntiSnipeWindow, Extend: cfg.AntiSnipeExtend},
@@ -99,57 +105,6 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 func pathID(r *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	return id, err == nil && id > 0
-}
-
-/* ---------- сессии ---------- */
-
-func (h *Handler) setSession(w http.ResponseWriter, userID int64) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    auth.Sign(h.secret, userID, sessionTTL),
-		Path:     "/",
-		MaxAge:   int(sessionTTL.Seconds()),
-		HttpOnly: true,
-		Secure:   h.cfg.CookieSecure,
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
-func (h *Handler) clearSession(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: h.cfg.CookieSecure, SameSite: http.SameSiteLaxMode,
-	})
-}
-
-// userID возвращает id авторизованного пользователя или 0.
-// Токен берётся из cookie, а при её отсутствии — из заголовка Authorization: Bearer.
-func (h *Handler) userID(r *http.Request) int64 {
-	token := ""
-	if c, err := r.Cookie(sessionCookie); err == nil {
-		token = c.Value
-	} else if a := r.Header.Get("Authorization"); len(a) > 7 && a[:7] == "Bearer " {
-		token = a[7:]
-	}
-	if token == "" {
-		return 0
-	}
-	id, err := auth.Parse(h.secret, token)
-	if err != nil {
-		return 0
-	}
-	return id
-}
-
-func (h *Handler) authed(fn func(w http.ResponseWriter, r *http.Request, uid int64)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		uid := h.userID(r)
-		if uid == 0 {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "Войдите в аккаунт")
-			return
-		}
-		fn(w, r, uid)
-	}
 }
 
 /* ---------- ограничитель попыток входа ---------- */
@@ -260,7 +215,9 @@ func SetupRoutes(mux *http.ServeMux, h *Handler) {
 
 	mux.HandleFunc("POST /api/auth/register", h.Register)
 	mux.HandleFunc("POST /api/auth/login", h.Login)
+	mux.HandleFunc("POST /api/auth/refresh", h.Refresh)
 	mux.HandleFunc("POST /api/auth/logout", h.Logout)
+	mux.HandleFunc("POST /api/auth/logout-all", h.LogoutAll)
 	mux.HandleFunc("GET /api/auth/me", h.authed(h.Me))
 
 	mux.HandleFunc("PUT /api/me/profile", h.authed(h.UpdateProfile))

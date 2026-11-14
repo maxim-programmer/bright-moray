@@ -51,12 +51,16 @@ func main() {
 	}
 	liveCancel()
 
+	cleanupCtx, stopCleanup := context.WithCancel(context.Background())
+	defer stopCleanup()
+	h.StartSessionCleanup(cleanupCtx)
+
 	mux := http.NewServeMux()
 	handler.SetupRoutes(mux, h)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           handler.Middleware(mux),
+		Handler:           handler.Middleware(h.Guard(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -74,6 +78,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
+	stopCleanup()
 	// WebSocket-соединения «угнаны» у net/http и Shutdown их не видит — закрываем сами
 	h.StopLive()
 
