@@ -41,7 +41,7 @@ async function exit() {
   exitError.value = ''
   try {
     await logout()
-    router.push('/')
+    router.push('/login')
   } catch (e) {
     exitError.value = handleApiError(e)
   }

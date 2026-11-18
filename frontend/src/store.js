@@ -1,8 +1,10 @@
 import { reactive } from 'vue'
-import { api, ApiError } from './api'
+import { api, ApiError, onSessionExpired, SESSION_GONE_CODES } from './api'
+import { reconnectRealtime } from './realtime'
 
 export const state = reactive({
-  user: null, // профиль из /auth/me; null — не вошли
+  user: null, // профиль из /auth/me; null — не вошли. Токены и id в браузерных хранилищах не держим
+  authNotice: '', // почему пользователя вывели из аккаунта — показывается на странице входа
   categories: [], // справочники грузятся один раз при старте
   dorms: [],
   now: Date.now(), // серверное время, обновляется раз в секунду
@@ -77,7 +79,7 @@ async function bootstrap() {
   return errors.length === 0
 }
 
-/* ---------- Ошибки API ---------- */
+/* ---------- Ошибки API и конец сессии ---------- */
 
 let unauthorizedHandler = null
 
@@ -86,12 +88,24 @@ export function onUnauthorized(handler) {
   unauthorizedHandler = handler
 }
 
-// Возвращает текст ошибки для пользователя. Если сессия истекла (401 от защищённого метода) —
-// забывает пользователя и отправляет на вход.
+// Сессия закончилась (refresh отказал или сервер не узнаёт нас даже после обновления):
+// забываем пользователя и отправляем на вход. Гостю, у которого сессии и не было, ничего не показываем.
+function sessionEnded(message) {
+  if (!state.user) return
+  state.user = null
+  state.authNotice = message || 'Сессия завершена, войдите заново'
+  reconnectRealtime() // сокет должен стать анонимным
+  if (unauthorizedHandler) unauthorizedHandler()
+}
+
+// api.js сам вызывает refresh на 401; сюда попадаем, только если обновить сессию не вышло
+onSessionExpired((error) => sessionEnded(error.message))
+
+// Возвращает текст ошибки для пользователя. Если сессии больше нет — выводит из аккаунта.
+// Сетевые ошибки и 5xx из аккаунта не выкидывают.
 export function handleApiError(error) {
-  if (error instanceof ApiError && error.status === 401 && error.code === 'unauthorized') {
-    state.user = null
-    if (unauthorizedHandler) unauthorizedHandler()
+  if (error instanceof ApiError && error.status === 401 && SESSION_GONE_CODES.has(error.code)) {
+    sessionEnded(error.message)
   }
   return error?.message || 'Ошибка сервера'
 }
@@ -213,17 +227,41 @@ export function isEndingSoon(lot) {
 /* ---------- Авторизация ---------- */
 
 // Сервер ставит httpOnly-cookie сессии, в JS храним только профиль
+function signedIn(user) {
+  state.user = user
+  state.authNotice = ''
+  reconnectRealtime() // новое подключение возьмёт свежую access-cookie
+}
+
+function signedOut() {
+  state.user = null
+  reconnectRealtime()
+}
+
 export async function register(data) {
-  state.user = await api.register({ ...data, dormId: Number(data.dormId) })
+  signedIn(await api.register({ ...data, dormId: Number(data.dormId) }))
 }
 
 export async function login(username, password) {
-  state.user = await api.login(username, password)
+  signedIn(await api.login(username, password))
 }
 
+// Выход на этом устройстве. Если сервер не ответил, cookie ещё живы — остаёмся в аккаунте,
+// чтобы пользователь мог повторить выход.
 export async function logout() {
   await api.logout()
-  state.user = null
+  signedOut()
+}
+
+// Выход на всех устройствах (включая это)
+export async function logoutAll() {
+  try {
+    await api.logoutAll()
+  } catch (e) {
+    // 401 после неудачного refresh: сессии и так нет — считаем, что вышли
+    if (!(e instanceof ApiError && e.status === 401)) throw e
+  }
+  signedOut()
 }
 
 /* ---------- Профиль и настройки ---------- */
@@ -241,6 +279,7 @@ export async function changeUsername(newUsername) {
   state.user = await api.changeUsername(newUsername)
 }
 
+// Это устройство сервер сразу пускает в новую сессию (новые cookie), остальные — разлогинивает
 export async function changePassword(current, newPassword, confirm) {
   await api.changePassword({ current, newPassword, confirm })
 }

@@ -1,4 +1,5 @@
-// Тонкий клиент к бэкенду. Сессия живёт в httpOnly-cookie, поэтому токен руками не храним.
+// Тонкий клиент к бэкенду. Сессия живёт в двух httpOnly-cookie (access и refresh, см. docs/AUTH.md):
+// в JS токенов нет и не должно быть — браузер сам отправляет cookie, мы только реагируем на 401.
 // Все функции возвращают распарсенный JSON или бросают ApiError { status, code, message }.
 
 export class ApiError extends Error {
@@ -9,26 +10,129 @@ export class ApiError extends Error {
   }
 }
 
-async function request(method, url, body) {
-  const options = { method, credentials: 'same-origin', headers: {} }
-  if (body instanceof FormData) {
-    options.body = body
-  } else if (body !== undefined) {
-    options.headers['Content-Type'] = 'application/json'
-    options.body = JSON.stringify(body)
-  }
-  let response
-  try {
-    response = await fetch(url, options)
-  } catch {
-    throw new ApiError(0, 'network', 'Нет связи с сервером')
-  }
-  const data = await response.json().catch(() => null)
-  if (!response.ok) {
-    throw new ApiError(response.status, data?.code || 'error', data?.error || 'Ошибка сервера')
-  }
-  return data
+const REFRESH_URL = '/api/auth/refresh'
+// На 401 от этих адресов не обновляем сессию: refresh — это и есть обновление,
+// а вход и регистрация отвечают 401 на неверные данные, а не на истёкший токен.
+const NO_REFRESH = new Set([REFRESH_URL, '/api/auth/login', '/api/auth/register'])
+// Сколько раз один запрос может вызвать refresh: второй нужен только после 409 refresh_conflict
+const MAX_REFRESHES = 2
+
+// Коды 401, после которых сессии больше нет (cookie сервер уже стёр)
+export const SESSION_GONE_CODES = new Set(['unauthorized', 'invalid_refresh', 'refresh_reused'])
+
+// 409 refresh_conflict: другая вкладка только что обновила общие cookie — даём им «доехать»
+function conflictDelay() {
+  return new Promise((resolve) => setTimeout(resolve, 100 + Math.random() * 200))
 }
+
+// Фабрика нужна тестам (свой fetch, без задержек); приложение пользуется экземпляром по умолчанию ниже.
+export function createHttp({ fetchImpl = (url, options) => fetch(url, options), wait = conflictDelay } = {}) {
+  let generation = 0 // растёт после каждого успешного refresh
+  let refreshing = null // single-flight: один общий промис на все одновременные 401
+  let expiredHandler = null
+
+  async function send(method, url, body) {
+    // credentials: 'include' — cookie уходят и при same-site схемах из ALLOWED_ORIGINS
+    const options = { method, credentials: 'include', headers: {} }
+    if (body instanceof FormData) {
+      options.body = body
+    } else if (body !== undefined) {
+      options.headers['Content-Type'] = 'application/json'
+      options.body = JSON.stringify(body)
+    }
+    let response
+    try {
+      response = await fetchImpl(url, options)
+    } catch {
+      throw new ApiError(0, 'network', 'Нет связи с сервером')
+    }
+    const data = await response.json().catch(() => null)
+    return { response, data }
+  }
+
+  function toError(response, data) {
+    return new ApiError(response.status, data?.code || 'error', data?.error || 'Ошибка сервера')
+  }
+
+  // Результат: { kind: 'ok' | 'conflict' | 'expired' | 'error', error? }. Никогда не бросает.
+  function refreshSession() {
+    if (!refreshing) {
+      refreshing = (async () => {
+        try {
+          const { response, data } = await send('POST', REFRESH_URL)
+          if (response.ok) {
+            generation++
+            return { kind: 'ok' }
+          }
+          if (response.status === 409) return { kind: 'conflict' }
+          const error = toError(response, data)
+          if (response.status === 401) {
+            // сессия закончилась — сообщаем один раз, а не каждому ждущему запросу
+            if (expiredHandler) expiredHandler(error)
+            return { kind: 'expired', error }
+          }
+          return { kind: 'error', error } // 5xx и прочее: из аккаунта не выкидываем
+        } catch (error) {
+          return { kind: 'error', error } // нет сети: тоже не выкидываем
+        }
+      })().finally(() => {
+        refreshing = null
+      })
+    }
+    return refreshing
+  }
+
+  async function request(method, url, body) {
+    const path = url.split('?')[0]
+    let refreshes = 0
+    let retryAfterRefresh = false // повтор после успешного refresh — ровно один
+    let staleRetried = false
+    let lastConflict = false
+    for (;;) {
+      const sentAt = generation
+      const { response, data } = await send(method, url, body)
+      if (response.ok) return data
+      if (response.status !== 401 || NO_REFRESH.has(path) || retryAfterRefresh) {
+        throw toError(response, data)
+      }
+      // Запрос ушёл со старой cookie, а пока он летел, сессию уже обновили — просто повторяем
+      if (generation !== sentAt && !staleRetried) {
+        staleRetried = true
+        continue
+      }
+      if (refreshes >= MAX_REFRESHES) {
+        throw lastConflict
+          ? new ApiError(409, 'refresh_conflict', 'Сессия обновляется, повторите действие')
+          : toError(response, data)
+      }
+      refreshes++
+      const result = await refreshSession()
+      if (result.kind === 'ok') {
+        retryAfterRefresh = true
+        continue
+      }
+      if (result.kind === 'conflict') {
+        lastConflict = true
+        await wait()
+        continue // при новом 401 ещё раз вызовем refresh
+      }
+      throw result.error
+    }
+  }
+
+  return {
+    request,
+    refreshSession,
+    // store.js подписывается: сбросить пользователя и отправить на вход
+    onSessionExpired(handler) {
+      expiredHandler = handler
+    }
+  }
+}
+
+const http = createHttp()
+const request = http.request
+export const onSessionExpired = http.onSessionExpired
 
 function qs(params = {}) {
   const sp = new URLSearchParams()
@@ -48,13 +152,14 @@ export const api = {
   // авторизация
   register: (data) => request('POST', '/api/auth/register', data),
   login: (username, password) => request('POST', '/api/auth/login', { username, password }),
-  logout: () => request('POST', '/api/auth/logout'),
+  logout: () => request('POST', '/api/auth/logout'), // текущее устройство
+  logoutAll: () => request('POST', '/api/auth/logout-all'), // все устройства
   me: () => request('GET', '/api/auth/me'), // 401, если не вошли
 
   // профиль
   updateProfile: (data) => request('PUT', '/api/me/profile', data), // { name, telegram, dormId }
   changeUsername: (newUsername) => request('PUT', '/api/me/username', { newUsername }),
-  changePassword: (data) => request('PUT', '/api/me/password', data), // { current, newPassword, confirm }
+  changePassword: (data) => request('PUT', '/api/me/password', data), // { current, newPassword, confirm }; другие устройства сервер разлогинит
   myStats: () => request('GET', '/api/me/stats'),
   myLots: () => request('GET', '/api/me/lots'),
   myBidLots: () => request('GET', '/api/me/bids'),

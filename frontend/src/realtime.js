@@ -6,7 +6,8 @@
 // события сервер не присылает, их заменяет snapshot.
 
 import { reactive } from 'vue'
-import { setServerTime } from './store'
+import { state, setServerTime } from './store'
+import { api } from './api'
 
 const MIN_DELAY_MS = 1000
 const MAX_DELAY_MS = 30000
@@ -26,6 +27,7 @@ let attempt = 0
 let reconnectTimer = null
 let idleTimer = null
 let reqSeq = 0
+let anonRetries = 0 // переподключений «вошли, а сокет анонимный» подряд — не больше одного
 
 function wsUrl() {
   return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/ws'
@@ -77,6 +79,18 @@ function connect() {
       realtime.userId = message.userId ?? null
       realtime.antiSnipe = message.antiSnipe || null
       realtime.connected = true
+      // Сервер не узнал нас при рукопожатии, хотя мы вошли: access-cookie истекла. Обновляем
+      // сессию общей логикой (me → 401 → refresh) и переподключаемся с новой cookie.
+      if (realtime.userId != null || !state.user) anonRetries = 0
+      else if (state.user && anonRetries < 1) {
+        anonRetries++
+        api
+          .me()
+          .then(() => {
+            if (socket === ws && state.user) reconnectRealtime()
+          })
+          .catch(() => {}) // конец сессии уже обработал store, сетевые ошибки не важны
+      }
       return
     }
 
@@ -116,6 +130,14 @@ function disconnect() {
     realtime.connected = false
     ws.close(1000)
   }
+}
+
+// Вход, выход или конец сессии: сокет аутентифицируется только при рукопожатии,
+// поэтому открываем новое соединение (если сейчас кто-то подписан).
+export function reconnectRealtime() {
+  if (!socket && !reconnectTimer) return
+  disconnect()
+  connect()
 }
 
 // Подписаться на события лота. Возвращает функцию отписки.

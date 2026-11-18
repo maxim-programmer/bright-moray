@@ -7,6 +7,7 @@ import {
   changeUsername,
   changePassword,
   logout,
+  logoutAll,
   handleApiError
 } from '../store'
 
@@ -58,7 +59,7 @@ async function savePassword() {
   passwordMsg.busy = true
   try {
     await changePassword(password.current, password.next, password.confirm)
-    passwordMsg.done = 'Пароль изменён'
+    passwordMsg.done = 'Пароль изменён. На других устройствах нужно будет войти заново'
     password.current = password.next = password.confirm = ''
   } catch (e) {
     passwordMsg.error = handleApiError(e)
@@ -68,13 +69,18 @@ async function savePassword() {
 }
 
 const exitError = ref('')
-async function exit() {
+const exitBusy = ref(false)
+async function exit(everywhere) {
+  if (exitBusy.value) return
   exitError.value = ''
+  exitBusy.value = true
   try {
-    await logout()
-    router.push('/')
+    await (everywhere ? logoutAll() : logout())
+    router.push('/login')
   } catch (e) {
     exitError.value = handleApiError(e)
+  } finally {
+    exitBusy.value = false
   }
 }
 </script>
@@ -140,6 +146,9 @@ async function exit() {
           Повторите новый пароль
           <input v-model="password.confirm" type="password" autocomplete="new-password" />
         </label>
+        <span class="hint">
+          На этом устройстве вы останетесь в аккаунте, а на остальных сессии завершатся
+        </span>
         <div v-if="passwordMsg.error" class="error">{{ passwordMsg.error }}</div>
         <div v-if="passwordMsg.done" class="success">{{ passwordMsg.done }}</div>
         <button class="button" type="submit" :disabled="passwordMsg.busy">Сменить пароль</button>
@@ -148,9 +157,14 @@ async function exit() {
       <div class="settings-card danger-zone wide-card">
         <div>
           <h2>Выход</h2>
-          <p class="muted">Завершить сессию на этом устройстве.</p>
+          <p class="muted">Завершить сессию на этом устройстве или сразу на всех, где вы входили.</p>
         </div>
-        <button class="button danger" @click="exit">Выйти из аккаунта</button>
+        <div class="exit-actions">
+          <button class="button danger" :disabled="exitBusy" @click="exit(false)">Выйти из аккаунта</button>
+          <button class="button danger" :disabled="exitBusy" @click="exit(true)">
+            Выйти на всех устройствах
+          </button>
+        </div>
         <div v-if="exitError" class="error">{{ exitError }}</div>
       </div>
     </div>

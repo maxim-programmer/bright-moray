@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { login, handleApiError } from '../store'
+import { state, login, handleApiError } from '../store'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,7 +32,8 @@ async function submit() {
 <template>
   <form class="form narrow" @submit.prevent="submit">
     <h1>Вход</h1>
-    <p v-if="route.query.redirect" class="muted">Войдите, чтобы продолжить</p>
+    <div v-if="state.authNotice" class="error">{{ state.authNotice }}</div>
+    <p v-else-if="route.query.redirect" class="muted">Войдите, чтобы продолжить</p>
     <label class="field">
       Никнейм
       <input v-model="username" type="text" autocomplete="username" />
