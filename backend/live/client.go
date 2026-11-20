@@ -2,12 +2,13 @@ package live
 
 import (
 	"auction/db"
+	"auction/logging"
 	"auction/model"
 	"auction/ws"
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"go.uber.org/zap"
 	"time"
 )
 
@@ -44,6 +45,22 @@ func newClient(h *Hub, conn *ws.Conn, uid int64) *client {
 	}
 }
 
+// bindRequest привязывает соединение к запросу рукопожатия: все записи соединения
+// получают его request_id (и user_id), поэтому ставки по WebSocket связываются в логе
+// с access-записью GET /api/ws. Вызывается до запуска горутин клиента.
+func (c *client) bindRequest(reqCtx context.Context) {
+	id := logging.RequestID(reqCtx)
+	if id == "" {
+		id = logging.NewRequestID()
+	}
+	ctx, _ := logging.WithRequest(c.ctx, c.h.base, id)
+	logging.SetUser(ctx, c.uid)
+	c.ctx = ctx // отмена по-прежнему идёт от c.cancel: контекст-значение оборачивает прежний
+}
+
+// log — логгер соединения (request_id рукопожатия, user_id, component=live).
+func (c *client) log() *zap.Logger { return c.h.logger(c.ctx) }
+
 // enqueue кладёт готовое сообщение в очередь на отправку, не блокируясь.
 // false — очередь переполнена (клиент не успевает читать).
 func (c *client) enqueue(data []byte) bool {
@@ -60,7 +77,7 @@ func (c *client) enqueue(data []byte) bool {
 func (c *client) reply(v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		log.Printf("live: сериализация ответа: %v", err)
+		c.log().Error("сериализация ответа", zap.Error(err))
 		return
 	}
 	if !c.enqueue(data) {
@@ -83,7 +100,11 @@ func (c *client) failure(err error, reqID string, lotID int64) {
 	case errors.Is(err, context.Canceled):
 		// клиент ушёл — отвечать некому
 	default:
-		log.Printf("live: внутренняя ошибка: %v", err)
+		fields := []zap.Field{zap.Error(err)}
+		if lotID > 0 {
+			fields = append(fields, zap.Int64("lot_id", lotID))
+		}
+		c.log().Error("внутренняя ошибка", fields...)
 		c.replyError("internal", "Внутренняя ошибка сервера", reqID, lotID)
 	}
 }

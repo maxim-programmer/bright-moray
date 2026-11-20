@@ -17,12 +17,13 @@ package live
 
 import (
 	"auction/db"
+	"auction/logging"
 	"auction/model"
 	"auction/ws"
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"go.uber.org/zap"
 	"net/http"
 	"net/url"
 	"strings"
@@ -63,6 +64,10 @@ type Options struct {
 	PingInterval   time.Duration
 	ReadTimeout    time.Duration
 	FinishSlack    time.Duration
+
+	// Logger — основа логов хаба и клиентов (без поля component: оно добавляется здесь).
+	// nil — logging.Default() на момент создания хаба.
+	Logger *zap.Logger
 }
 
 type timerEntry struct {
@@ -75,6 +80,9 @@ type Hub struct {
 	store Store
 	opts  Options
 	up    *ws.Upgrader
+
+	base *zap.Logger // без component: на его основе строится логгер соединения
+	log  *zap.Logger // base + component=live: для работы вне запросов (таймеры)
 
 	ctx    context.Context // для фоновой работы планировщика; отменяется в Shutdown
 	cancel context.CancelFunc
@@ -109,9 +117,15 @@ func New(store Store, opts Options) *Hub {
 	if opts.FinishSlack <= 0 {
 		opts.FinishSlack = defaultFinishWait
 	}
+	base := opts.Logger
+	if base == nil {
+		base = logging.Default()
+	}
 	h := &Hub{
 		store:   store,
 		opts:    opts,
+		base:    base,
+		log:     base.With(zap.String("component", logging.ComponentLive)),
 		clients: map[*client]struct{}{},
 		rooms:   map[int64]map[*client]struct{}{},
 		timers:  map[int64]*timerEntry{},
@@ -136,7 +150,7 @@ func (h *Hub) Start(ctx context.Context) error {
 	for _, e := range ends {
 		h.schedule(e.ID, e.Left)
 	}
-	log.Printf("live: запланировано завершение %d активных лотов", len(ends))
+	h.log.Info("запланировано завершение активных лотов", zap.Int("lots", len(ends)))
 	return nil
 }
 
@@ -220,12 +234,17 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, uid int64) {
 		return // ответ клиенту уже отправлен
 	}
 	c := newClient(h, conn, uid)
+	c.bindRequest(r.Context()) // записи соединения получают request_id рукопожатия
 	if !h.register(c) {
 		_ = conn.WriteClose(ws.CloseGoingAway, "server shutting down")
 		conn.Close()
 		return
 	}
-	defer h.unregister(c)
+	defer func() {
+		h.unregister(c)
+		c.log().Debug("WebSocket отключён")
+	}()
+	c.log().Debug("WebSocket подключён")
 
 	go c.writeLoop()
 	c.sendHello()
@@ -304,7 +323,7 @@ func (h *Hub) removeSub(c *client, lotID int64) {
 func (h *Hub) publish(lotID int64, v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		log.Printf("live: сериализация события: %v", err)
+		h.log.Error("сериализация события", zap.Int64("lot_id", lotID), zap.Error(err))
 		return
 	}
 	var slow []*client
@@ -316,7 +335,7 @@ func (h *Hub) publish(lotID int64, v any) {
 	}
 	h.mu.RUnlock()
 	for _, c := range slow {
-		log.Printf("live: отключаем медленного клиента %v", c.conn.RemoteAddr())
+		c.log().Warn("отключён медленный клиент", zap.Int64("lot_id", lotID))
 		c.conn.Close()
 	}
 }
@@ -350,10 +369,11 @@ func (h *Hub) PlaceBid(ctx context.Context, lotID, userID int64, amount int) (Pl
 	defer cancel()
 	live, err := h.store.GetLotLive(bg, lotID)
 	if err != nil {
-		log.Printf("live: состояние лота %d после ставки: %v", lotID, err)
+		h.logger(ctx).Error("состояние лота после ставки", zap.Int64("lot_id", lotID), zap.Error(err))
 		return out, nil
 	}
 	out.Lot = &live
+	h.logger(ctx).Info("ставка принята", zap.Int64("lot_id", lotID))
 	h.publish(lotID, bidEvent{
 		Type: "bid", LotID: lotID, Bid: res.Bid, Lot: live, Extended: res.Extended, Now: nowMs(),
 	})
@@ -375,9 +395,10 @@ func (h *Hub) CancelLot(ctx context.Context, lotID, userID int64) error {
 	defer cancel()
 	live, err := h.store.GetLotLive(bg, lotID)
 	if err != nil {
-		log.Printf("live: состояние лота %d после отмены: %v", lotID, err)
+		h.logger(ctx).Error("состояние лота после отмены", zap.Int64("lot_id", lotID), zap.Error(err))
 		return nil
 	}
+	h.logger(ctx).Info("лот отменён", zap.Int64("lot_id", lotID))
 	h.publish(lotID, lotEvent{Type: "lot_cancelled", LotID: lotID, Lot: live, Now: nowMs()})
 	return nil
 }
@@ -458,7 +479,7 @@ func (h *Hub) finish(lotID int64, gen uint64) {
 		h.dropTimer(lotID, gen)
 		return
 	case err != nil:
-		log.Printf("live: проверка срока лота %d: %v", lotID, err)
+		h.log.Error("проверка срока лота", zap.Int64("lot_id", lotID), zap.Error(err))
 		h.schedule(lotID, retryAfterError-h.opts.FinishSlack)
 		return
 	case status == "cancelled":
@@ -471,12 +492,23 @@ func (h *Hub) finish(lotID int64, gen uint64) {
 
 	live, err := h.store.GetLotLive(ctx, lotID)
 	if err != nil {
-		log.Printf("live: состояние лота %d при завершении: %v", lotID, err)
+		h.log.Error("состояние лота при завершении", zap.Int64("lot_id", lotID), zap.Error(err))
 		h.schedule(lotID, retryAfterError-h.opts.FinishSlack)
 		return
 	}
 	h.dropTimer(lotID, gen)
+	h.log.Info("аукцион завершён", zap.Int64("lot_id", lotID))
 	h.publish(lotID, lotEvent{Type: "lot_finished", LotID: lotID, Lot: live, Now: nowMs()})
+}
+
+// logger возвращает логгер для записи в контексте ctx. Если у ctx есть состояние запроса
+// (REST-запрос или WebSocket-соединение), запись получит request_id и user_id; иначе
+// (таймеры) — логгер хаба.
+func (h *Hub) logger(ctx context.Context) *zap.Logger {
+	if logging.RequestFrom(ctx) != nil {
+		return logging.FromContext(ctx, logging.ComponentLive)
+	}
+	return h.log
 }
 
 func nowMs() int64 { return time.Now().UnixMilli() }
