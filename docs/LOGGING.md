@@ -21,7 +21,7 @@
 | Переменная | По умолчанию | Смысл |
 |---|---|---|
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` или `error`; другое значение — ошибка старта |
-| `LOG_FILE` | пусто | путь к JSON-файлу; пусто — только stdout. В Docker: `/data/logs/app.log` |
+| `LOG_FILE` | пусто | путь к JSON-файлу; пусто — только stdout. В Docker: `/data/logs/app.log` (на хосте — `./out/logs/app.log`) |
 
 Если файл задан, но недоступен, сервер не запускается: молча потерять логи хуже, чем
 заметить ошибку при старте.
@@ -99,12 +99,27 @@
 5 архивов, не старше 14 дней, архивы сжимаются. Параметры — константы в
 `backend/logging/logging.go`.
 
+## Где лежат файлы
+
+Каталог `/data/logs` контейнера смонтирован на диск хоста, поэтому логи переживают
+пересоздание контейнеров и тома:
+
+| Что | На хосте | В контейнере |
+|---|---|---|
+| Логи (JSON + ротированные `*.log.gz`) | `./out/logs/` | `/data/logs` |
+| Данные PostgreSQL | `./out/pgdata/` | `/var/lib/postgresql/data` |
+
+`out/` в `.gitignore`. Права на `./out/logs` выдаёт одноразовый контейнер `init-dirs`
+(бэкенд работает под uid 10001, а Docker создаёт каталог от root). Файлы логов доступны
+для чтения обычному пользователю; `./out/pgdata` принадлежит пользователю PostgreSQL
+внутри контейнера, поэтому для его удаления нужен `sudo`.
+
 ## Просмотр
 
 ```sh
+tail -f out/logs/app.log                                       # JSON, прямо на хосте
+grep '"request_id":"<id>"' out/logs/app.log                    # все записи запроса
 docker compose logs -f backend                                 # консольный формат
-docker compose exec backend tail -f /data/logs/app.log         # JSON
-docker compose exec backend grep '"request_id":"<id>"' /data/logs/app.log
 ```
 
 ## Подготовка к Grafana + Loki
@@ -112,4 +127,5 @@ docker compose exec backend grep '"request_id":"<id>"' /data/logs/app.log
 Loki пока не подключён, но формат готов: одна JSON-запись на строку со стабильными ключами.
 Когда понадобится, в метки (labels) стоит брать только `service` и `level`;
 `request_id`, `user_id` и `path` — в теле записи, у них высокая кардинальность.
-Сборщик (Promtail/Alloy) читает том `logs_data`, ротацию файла он переживает.
+Сборщик (Promtail/Alloy) читает каталог `out/logs` (или `/data/logs` внутри контейнера),
+ротацию файла он переживает.

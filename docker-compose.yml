@@ -6,13 +6,23 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-auction_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Данные БД лежат на хосте: переживают `docker compose down -v` и снос Docker.
+      - ./out/pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction}"]
       interval: 5s
       timeout: 3s
       retries: 10
     restart: unless-stopped
+
+  # Одноразовая подготовка каталога логов. Docker создаёт ./out/logs от имени root,
+  # а бэкенд работает под пользователем app (uid 10001) и не смог бы там писать.
+  init-dirs:
+    image: alpine:3.20
+    command: ["sh", "-c", "mkdir -p /logs && chown 10001:10001 /logs && chmod 755 /logs"]
+    volumes:
+      - ./out/logs:/logs
+    restart: "no"
 
   # Миграции бэкенд применяет сам при старте (таблица schema_migrations).
   backend:
@@ -21,6 +31,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      init-dirs:
+        condition: service_completed_successfully
     environment:
       DB_HOST: db
       DB_PORT: "5432"
@@ -41,7 +53,8 @@ services:
       LOG_FILE: /data/logs/app.log
     volumes:
       - uploads_data:/data/uploads
-      - logs_data:/data/logs
+      # Логи на хосте: ./out/logs/app.log (JSON) и ротированные архивы рядом.
+      - ./out/logs:/data/logs
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 10s
@@ -61,6 +74,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
   uploads_data:
-  logs_data:

@@ -21,6 +21,7 @@ tmp/
 
 uploads/
 pgdata/
-*.db
 
-.gigacode/
+# Данные и логи, которые docker compose кладёт на хост (БД, app.log)
+out/
+*.db
