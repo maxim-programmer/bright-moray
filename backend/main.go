@@ -4,6 +4,7 @@ import (
 	"auction/config"
 	"auction/db"
 	"auction/handler"
+	"auction/logging"
 	"context"
 	"database/sql"
 	"errors"
@@ -16,17 +17,29 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
+		// Логгер строится из конфигурации, поэтому ошибки самого конфига — стандартным log.
 		log.Fatalf("Конфигурация: %v", err)
 	}
 
+	logger, closeLog, err := logging.New(logging.Config{Level: cfg.LogLevel, File: cfg.LogFile})
+	if err != nil {
+		log.Fatalf("Логирование: %v", err)
+	}
+	defer closeLog()
+	logging.SetDefault(logger) // его используют Middleware и всё, что не получило логгер явно
+	lg := logger.With(zap.String("component", logging.ComponentMain))
+	lg.Info("логирование настроено", zap.String("log_level", cfg.LogLevel), zap.String("log_file", cfg.LogFile))
+
 	sqlDB, err := openDB(cfg.DSN())
 	if err != nil {
-		log.Fatalf("База данных: %v", err)
+		lg.Fatal("база данных", zap.Error(err))
 	}
 	defer sqlDB.Close()
 
@@ -35,19 +48,19 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := q.Migrate(ctx); err != nil {
 		cancel()
-		log.Fatalf("Миграции: %v", err)
+		lg.Fatal("миграции", zap.Error(err))
 	}
 	cancel()
 
 	if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
-		log.Fatalf("Папка загрузок: %v", err)
+		lg.Fatal("папка загрузок", zap.Error(err))
 	}
 
-	h := handler.New(q, cfg)
+	h := handler.New(q, cfg, handler.WithLogger(logger))
 	liveCtx, liveCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := h.StartLive(liveCtx); err != nil {
 		liveCancel()
-		log.Fatalf("Реалтайм: %v", err)
+		lg.Fatal("реалтайм", zap.Error(err))
 	}
 	liveCancel()
 
@@ -58,6 +71,12 @@ func main() {
 	mux := http.NewServeMux()
 	handler.SetupRoutes(mux, h)
 
+	// собственные сообщения net/http (например, «superfluous WriteHeader») — в тот же лог
+	httpErrLog, err := zap.NewStdLogAt(logger.With(zap.String("component", logging.ComponentServer)), zapcore.WarnLevel)
+	if err != nil {
+		lg.Fatal("лог HTTP-сервера", zap.Error(err))
+	}
+
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           handler.Middleware(h.Guard(mux)),
@@ -65,18 +84,20 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		ErrorLog:          httpErrLog,
 	}
 
 	go func() {
-		log.Println("HTTP-сервер запущен на порту", cfg.Port)
+		lg.Info("HTTP-сервер запущен", zap.String("port", cfg.Port))
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("HTTP-сервер: %v", err)
+			lg.Fatal("HTTP-сервер", zap.Error(err))
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	sig := <-quit
+	lg.Info("получен сигнал остановки", zap.String("signal", sig.String()))
 
 	stopCleanup()
 	// WebSocket-соединения «угнаны» у net/http и Shutdown их не видит — закрываем сами
@@ -85,9 +106,9 @@ func main() {
 	shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Остановка сервера: %v", err)
+		lg.Error("остановка сервера", zap.Error(err))
 	}
-	log.Println("Сервер остановлен")
+	lg.Info("сервер остановлен")
 }
 
 // openDB открывает пул и ждёт, пока база начнёт отвечать (на старте контейнеров она может отставать).
