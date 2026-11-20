@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -176,25 +178,200 @@ func TestParseLevel(t *testing.T) {
 	}
 }
 
-func TestNewWritesJSONFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "dir", "app.log")
-	l, closeFn, err := New(Config{Level: "debug", File: path, Service: "svc"})
+// runFiles возвращает имена файлов запусков в dir (по возрастанию, т. е. по времени).
+func runFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.Info("привет", zap.String("component", "main"))
+	var names []string
+	for _, e := range entries {
+		if runFileRE.MatchString(e.Name()) {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
+func TestNewWritesJSONFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested", "logs")
+	l, closeFn, err := New(Config{Level: "debug", Dir: dir, Service: "svc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Info("hello", zap.String("component", "main"))
 	closeFn()
 
-	data, err := os.ReadFile(path)
+	files := runFiles(t, dir)
+	if len(files) != 1 {
+		t.Fatalf("файлов запуска: %v", files)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, files[0]))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rec map[string]any
-	if err := json.Unmarshal(bytes.TrimSpace(data), &rec); err != nil {
-		t.Fatalf("в файле не JSON: %v\n%s", err, data)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 { // «log file created» и hello
+		t.Fatalf("строк в файле: %d\n%s", len(lines), data)
 	}
-	if rec["msg"] != "привет" || rec["service"] != "svc" || rec["level"] != "info" {
-		t.Errorf("запись: %v", rec)
+	for _, line := range lines {
+		noDuplicateKeys(t, line)
+	}
+	var created, hello map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &created); err != nil {
+		t.Fatalf("в файле не JSON: %v\n%s", err, lines[0])
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &hello); err != nil {
+		t.Fatalf("в файле не JSON: %v\n%s", err, lines[1])
+	}
+	if created["msg"] != "log file created" || created["log_file"] != filepath.Join(dir, files[0]) {
+		t.Errorf("запись о файле: %v", created)
+	}
+	if hello["msg"] != "hello" || hello["service"] != "svc" || hello["level"] != "info" {
+		t.Errorf("запись: %v", hello)
+	}
+}
+
+// Каждый запуск пишет в свой файл, а не дописывает в общий.
+func TestNewCreatesFilePerRun(t *testing.T) {
+	dir := t.TempDir()
+	for _, msg := range []string{"first run", "second run"} {
+		l, closeFn, err := New(Config{Dir: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.Info(msg)
+		closeFn()
+	}
+
+	files := runFiles(t, dir)
+	if len(files) != 2 || files[0] == files[1] {
+		t.Fatalf("ожидалось два разных файла, получено %v", files)
+	}
+	for i, msg := range []string{"first run", "second run"} {
+		data, err := os.ReadFile(filepath.Join(dir, files[i]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		other := []string{"second run", "first run"}[i]
+		if !strings.Contains(string(data), msg) || strings.Contains(string(data), other) {
+			t.Errorf("файл %s: %s", files[i], data)
+		}
+	}
+}
+
+func TestRunFileNameAndMode(t *testing.T) {
+	dir := t.TempDir()
+	before := time.Now().UTC().Add(-time.Second)
+	path, err := createRunFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Base(path)
+	if filepath.Dir(path) != dir || !runFileRE.MatchString(name) {
+		t.Fatalf("путь %q", path)
+	}
+	// имя — время старта в UTC: 2026-11-19T12-00-00.123456.log
+	ts, err := time.Parse(runFileLayout, strings.TrimSuffix(name, ".log"))
+	if err != nil {
+		t.Fatalf("имя %q: %v", name, err)
+	}
+	if ts.Before(before) || ts.After(time.Now().UTC().Add(time.Second)) {
+		t.Errorf("время в имени %v далеко от текущего", ts)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o444 != 0o444&^umaskBits() { // читается пользователем хоста
+		t.Errorf("режим файла %v", info.Mode())
+	}
+}
+
+// umaskBits возвращает текущую маску процесса, не меняя её.
+func umaskBits() os.FileMode {
+	old := syscall.Umask(0)
+	syscall.Umask(old)
+	return os.FileMode(old)
+}
+
+func TestPruneOldRuns(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	touch := func(name string, age time.Duration) {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mt := now.Add(-age)
+		if err := os.Chtimes(p, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const day = 24 * time.Hour
+	touch("2026-11-15T10-00-00.000001.log", 4*day)
+	touch("2026-11-16T10-00-00.000001.log", 3*day)
+	touch("2026-11-17T10-00-00.000001.log", 2*day)
+	touch("2026-11-18T10-00-00.000001.log", 1*day)
+	touch("2026-11-18T10-00-00.000001-2026-11-18T15-00-00.000.log.gz", 1*day) // ротированная копия запуска
+	touch("2026-10-01T10-00-00.000001.log", 49*day)                           // старше 14 суток
+	touch("notes.txt", 100*day)                                               // чужие файлы не трогаем
+	touch("app.log", 100*day)
+
+	pruneOldRuns(dir, 2, 14*day, now)
+
+	left := map[string]bool{}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		left[e.Name()] = true
+	}
+	for _, name := range []string{
+		"2026-11-17T10-00-00.000001.log",
+		"2026-11-18T10-00-00.000001.log",
+		"2026-11-18T10-00-00.000001-2026-11-18T15-00-00.000.log.gz", // уходит и остаётся вместе со своим запуском
+		"notes.txt", "app.log",
+	} {
+		if !left[name] {
+			t.Errorf("%s удалён, а не должен", name)
+		}
+	}
+	for _, name := range []string{
+		"2026-11-15T10-00-00.000001.log", "2026-11-16T10-00-00.000001.log", // сверх keep=2
+		"2026-10-01T10-00-00.000001.log", // старше maxAge
+	} {
+		if left[name] {
+			t.Errorf("%s должен быть удалён", name)
+		}
+	}
+
+	// по возрасту удаляются и недавние по номеру запуска, если файл старый
+	touch("2026-11-19T01-00-00.000001.log", 15*day)
+	pruneOldRuns(dir, 10, 14*day, now)
+	if _, err := os.Stat(filepath.Join(dir, "2026-11-19T01-00-00.000001.log")); err == nil {
+		t.Error("файл старше maxAge не удалён")
+	}
+}
+
+func TestPruneMissingDirIsNoop(t *testing.T) {
+	pruneOldRuns(filepath.Join(t.TempDir(), "nope"), 1, time.Hour, time.Now()) // не должно паниковать
+}
+
+// New чистит старые запуски: после keepRuns+5 запусков остаётся ровно keepRuns файлов
+// (включая файл последнего запуска).
+func TestNewPrunesOldRuns(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < keepRuns+5; i++ {
+		l, closeFn, err := New(Config{Dir: dir, Level: "error"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = l
+		closeFn()
+	}
+	if n := len(runFiles(t, dir)); n != keepRuns {
+		t.Errorf("файлов после серии запусков: %d, ожидалось %d", n, keepRuns)
 	}
 }
 
@@ -209,14 +386,14 @@ func TestNewWithoutFile(t *testing.T) {
 	}
 }
 
-func TestNewFailsFastOnBadFileOrLevel(t *testing.T) {
+func TestNewFailsFastOnBadDirOrLevel(t *testing.T) {
 	// родитель — обычный файл, каталог создать нельзя
 	blocker := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := New(Config{File: filepath.Join(blocker, "app.log")}); err == nil {
-		t.Error("недоступный файл: ожидалась ошибка при старте")
+	if _, _, err := New(Config{Dir: filepath.Join(blocker, "logs")}); err == nil {
+		t.Error("недоступный каталог: ожидалась ошибка при старте")
 	}
 	if _, _, err := New(Config{Level: "loud"}); err == nil {
 		t.Error("неизвестный уровень: ожидалась ошибка")

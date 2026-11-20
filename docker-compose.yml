@@ -9,7 +9,7 @@ services:
       # Данные БД лежат на хосте: переживают `docker compose down -v` и снос Docker.
       - ./out/pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-auction_user} -d ${POSTGRES_DB:-auction}" ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -19,7 +19,7 @@ services:
   # а бэкенд работает под пользователем app (uid 10001) и не смог бы там писать.
   init-dirs:
     image: alpine:3.20
-    command: ["sh", "-c", "mkdir -p /logs && chown 10001:10001 /logs && chmod 755 /logs"]
+    command: [ "sh", "-c", "mkdir -p /logs && chown 10001:10001 /logs && chmod 755 /logs" ]
     volumes:
       - ./out/logs:/logs
     restart: "no"
@@ -50,13 +50,13 @@ services:
       WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-}
       UPLOAD_DIR: /data/uploads
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      LOG_FILE: /data/logs/app.log
+      LOG_DIR: /data/logs
     volumes:
       - uploads_data:/data/uploads
-      # Логи на хосте: ./out/logs/app.log (JSON) и ротированные архивы рядом.
+      # Логи на хосте: ./out/logs/<время запуска>.log — отдельный JSON-файл на каждый запуск.
       - ./out/logs:/data/logs
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: [ "CMD", "wget", "-qO-", "http://localhost:8080/health" ]
       interval: 10s
       timeout: 3s
       retries: 5

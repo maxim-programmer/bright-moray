@@ -1,6 +1,7 @@
 package config
 
 import (
+	"auction/logging"
 	"errors"
 	"fmt"
 	"net/url"
@@ -8,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"auction/logging"
 )
 
 type Config struct {
@@ -25,9 +24,10 @@ type Config struct {
 	UploadDir    string // куда сохраняются загруженные картинки
 	CookieSecure bool   // true, если сайт отдаётся по HTTPS
 
-	// Логирование. Консоль (stdout) пишется всегда; JSON-файл — только если задан LogFile.
+	// Логирование. Консоль (stdout) пишется всегда; JSON-файлы — только если задан LogDir:
+	// каждый запуск создаёт в нём новый файл <время старта>.log.
 	LogLevel string // debug, info, warn или error
-	LogFile  string // путь к JSON-файлу лога (с ротацией); пусто — файла нет
+	LogDir   string // каталог для файлов логов; пусто — файлов нет
 
 	// Anti-snipe: ставка, сделанная меньше чем за AntiSnipeWindow до конца аукциона,
 	// продлевает его так, чтобы до конца оставалось не меньше AntiSnipeExtend.
@@ -97,7 +97,7 @@ func Load() (Config, error) {
 		UploadDir:    env("UPLOAD_DIR", "./uploads"),
 		CookieSecure: strings.EqualFold(os.Getenv("COOKIE_SECURE"), "true"),
 		LogLevel:     strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL"))),
-		LogFile:      strings.TrimSpace(os.Getenv("LOG_FILE")),
+		LogDir:       strings.TrimSpace(os.Getenv("LOG_DIR")),
 	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
@@ -106,7 +106,7 @@ func Load() (Config, error) {
 		return cfg, fmt.Errorf("LOG_LEVEL: %w", err)
 	}
 	if len(cfg.JWTSecret) < 16 {
-		return cfg, errors.New("JWT_SECRET должен быть задан и содержать не менее 16 символов")
+		return cfg, errors.New("JWT_SECRET must be set and contain at least 16 characters")
 	}
 
 	var err error
@@ -117,7 +117,7 @@ func Load() (Config, error) {
 		return cfg, err
 	}
 	if cfg.AntiSnipeWindow > 0 && cfg.AntiSnipeExtend <= 0 {
-		return cfg, errors.New("ANTI_SNIPE_EXTEND_SEC должен быть больше 0, если включён ANTI_SNIPE_WINDOW_SEC")
+		return cfg, errors.New("ANTI_SNIPE_EXTEND_SEC must be greater than 0 when ANTI_SNIPE_WINDOW_SEC is enabled")
 	}
 
 	for _, o := range strings.Split(os.Getenv("WS_ALLOWED_ORIGINS"), ",") {
@@ -142,7 +142,7 @@ func Load() (Config, error) {
 		return cfg, err
 	}
 	if cfg.RefreshReuseGap > maxReuseGap {
-		return cfg, fmt.Errorf("REFRESH_REUSE_GAP_SEC: не больше %d секунд", int(maxReuseGap/time.Second))
+		return cfg, fmt.Errorf("REFRESH_REUSE_GAP_SEC: must not exceed %d seconds", int(maxReuseGap/time.Second))
 	}
 	return cfg, nil
 }
@@ -155,7 +155,7 @@ func NormalizeOrigin(raw string) (string, error) {
 	u, err := url.Parse(o)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
 		u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-		return "", fmt.Errorf("%q: ожидается origin вида https://example.com[:порт] без пути", raw)
+		return "", fmt.Errorf("%q: expected an origin like https://example.com[:port] without a path", raw)
 	}
 	return u.Scheme + "://" + u.Host, nil
 }
@@ -180,10 +180,10 @@ func envSeconds(key string, defSeconds int) (time.Duration, error) {
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || n < 0 {
-		return 0, fmt.Errorf("%s: ожидается целое число секунд ≥ 0, получено %q", key, raw)
+		return 0, fmt.Errorf("%s: expected a whole number of seconds >= 0, got %q", key, raw)
 	}
 	if n > int(maxAntiSnipe/time.Second) { // проверяем до умножения — иначе возможно переполнение
-		return 0, fmt.Errorf("%s: не больше %d секунд", key, int(maxAntiSnipe/time.Second))
+		return 0, fmt.Errorf("%s: must not exceed %d seconds", key, int(maxAntiSnipe/time.Second))
 	}
 	return time.Duration(n) * time.Second, nil
 }
