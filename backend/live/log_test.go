@@ -1,6 +1,7 @@
 package live
 
 import (
+	"auction/logging"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,8 +11,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
-
-	"auction/logging"
 )
 
 // Остальные тесты хаба делают сотни ставок; логгер по умолчанию заглушаем, чтобы они
@@ -52,7 +51,7 @@ func TestBidLogCarriesHandshakeRequestID(t *testing.T) {
 	c.want("bid") // подписчик сначала получает событие, затем подтверждение
 	c.want("bid_ok")
 
-	e, ok := findLog(logs, "ставка принята")
+	e, ok := findLog(logs, "bid placed")
 	if !ok {
 		t.Fatalf("нет записи о ставке: %v", logs.All())
 	}
@@ -66,7 +65,7 @@ func TestBidLogCarriesHandshakeRequestID(t *testing.T) {
 			t.Errorf("%s = %v, ожидалось %v (%v)", k, m[k], v, m)
 		}
 	}
-	if conn, ok := findLog(logs, "WebSocket подключён"); !ok || conn.Level != zapcore.DebugLevel ||
+	if conn, ok := findLog(logs, "websocket connected"); !ok || conn.Level != zapcore.DebugLevel ||
 		conn.ContextMap()["request_id"] != "handshake-0001" {
 		t.Errorf("подключение: %v %v", ok, conn)
 	}
@@ -83,12 +82,12 @@ func TestClientGetsOwnRequestIDWithoutHandshakeID(t *testing.T) {
 	c.want("hello")
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, ok := findLog(logs, "WebSocket подключён"); ok {
+		if _, ok := findLog(logs, "websocket connected"); ok {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	e, ok := findLog(logs, "WebSocket подключён")
+	e, ok := findLog(logs, "websocket connected")
 	if !ok {
 		t.Fatal("нет записи о подключении")
 	}
@@ -112,7 +111,7 @@ func TestFinishLogHasNoRequestScope(t *testing.T) {
 	c.subscribe(1)
 	c.want("lot_finished")
 
-	e, ok := findLog(logs, "аукцион завершён")
+	e, ok := findLog(logs, "auction finished")
 	if !ok {
 		t.Fatalf("нет записи о завершении: %v", logs.All())
 	}

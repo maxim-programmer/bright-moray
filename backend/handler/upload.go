@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"auction/logging"
 	"crypto/rand"
 	"encoding/hex"
 	"io"
@@ -9,8 +10,6 @@ import (
 	"path/filepath"
 
 	"go.uber.org/zap"
-
-	"auction/logging"
 )
 
 const maxUpload = 5 << 20 // 5 МБ
@@ -76,7 +75,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request, uid int64) {
 		fail(w, r, err)
 		return
 	}
-	logging.FromContext(r.Context(), logging.ComponentHandler).Info("файл загружен", zap.String("file", name))
+	logging.FromContext(r.Context(), logging.ComponentHandler).Info("file uploaded", zap.String("file", name))
 	writeJSON(w, http.StatusCreated, map[string]string{"url": "/uploads/" + name})
 }
 

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"auction/migrations"
 	"context"
 	"database/sql"
 	"errors"
@@ -9,8 +10,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"auction/migrations"
 )
 
 var (
@@ -96,7 +95,7 @@ func (q *Queries) Migrate(ctx context.Context) error {
 		}
 		if _, err := tx.ExecContext(ctx, string(body)); err != nil {
 			tx.Rollback()
-			return fmt.Errorf("миграция %s: %w", name, err)
+			return fmt.Errorf("migration %s: %w", name, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, name); err != nil {
 			tx.Rollback()

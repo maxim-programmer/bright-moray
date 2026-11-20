@@ -16,7 +16,7 @@ const (
 func NewRefreshToken() (token string, hash []byte, err error) {
 	var raw [refreshTokenBytes]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return "", nil, fmt.Errorf("auth: источник случайности: %w", err)
+		return "", nil, fmt.Errorf("auth: randomness source: %w", err)
 	}
 	token = b64.EncodeToString(raw[:])
 	sum := sha256.Sum256([]byte(token))

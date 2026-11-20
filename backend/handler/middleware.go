@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"auction/logging"
 	"bufio"
 	"context"
 	"fmt"
@@ -10,8 +11,6 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-
-	"auction/logging"
 )
 
 // requestIDHeader — заголовок, которым request_id приходит от прокси (nginx) и
@@ -88,7 +87,7 @@ func Middleware(next http.Handler) http.Handler {
 func logPanic(ctx context.Context, err error) {
 	logging.FromContext(ctx, logging.ComponentMiddleware).
 		WithOptions(zap.AddStacktrace(zapcore.ErrorLevel)).
-		Error("panic в обработчике", zap.Error(err))
+		Error("panic in handler", zap.Error(err))
 }
 
 // logAccess пишет единую запись о запросе:

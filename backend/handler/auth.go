@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"auction/db"
+	"auction/logging"
 	"errors"
 	"net/http"
 	"regexp"
@@ -9,9 +11,6 @@ import (
 
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
-
-	"auction/db"
-	"auction/logging"
 )
 
 var (
@@ -289,7 +288,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request, uid int
 	// Если не получилось — просто стираем cookie, и пользователь войдёт с новым паролем.
 	if err := h.startSession(w, r, uid); err != nil {
 		logging.FromContext(r.Context(), logging.ComponentAuth).
-			Warn("не удалось открыть сессию после смены пароля", zap.Error(err))
+			Warn("failed to start session after password change", zap.Error(err))
 		h.clearAuthCookies(w)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

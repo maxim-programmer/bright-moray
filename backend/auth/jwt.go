@@ -68,11 +68,11 @@ type JWT struct {
 func NewJWT(o Options) (*JWT, error) {
 	switch {
 	case len(o.Secret) == 0:
-		return nil, errors.New("auth: пустой секрет подписи")
+		return nil, errors.New("auth: empty signing secret")
 	case o.Issuer == "" || o.Audience == "":
-		return nil, errors.New("auth: не заданы issuer/audience")
+		return nil, errors.New("auth: issuer/audience are not set")
 	case o.TTL <= 0:
-		return nil, errors.New("auth: TTL access-токена должен быть положительным")
+		return nil, errors.New("auth: access token TTL must be positive")
 	}
 	now := o.Now
 	if now == nil {
@@ -115,11 +115,11 @@ func (j *JWT) mac(signingInput string) []byte {
 // Issue выпускает access-токен пользователя.
 func (j *JWT) Issue(userID int64) (string, Claims, error) {
 	if userID <= 0 {
-		return "", Claims{}, errors.New("auth: некорректный id пользователя")
+		return "", Claims{}, errors.New("auth: invalid user id")
 	}
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return "", Claims{}, fmt.Errorf("auth: источник случайности: %w", err)
+		return "", Claims{}, fmt.Errorf("auth: randomness source: %w", err)
 	}
 	now := j.now()
 	c := Claims{

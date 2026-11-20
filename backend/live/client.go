@@ -8,8 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"go.uber.org/zap"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -77,7 +78,7 @@ func (c *client) enqueue(data []byte) bool {
 func (c *client) reply(v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		c.log().Error("сериализация ответа", zap.Error(err))
+		c.log().Error("failed to marshal reply", zap.Error(err))
 		return
 	}
 	if !c.enqueue(data) {
@@ -104,7 +105,7 @@ func (c *client) failure(err error, reqID string, lotID int64) {
 		if lotID > 0 {
 			fields = append(fields, zap.Int64("lot_id", lotID))
 		}
-		c.log().Error("внутренняя ошибка", fields...)
+		c.log().Error("internal error", fields...)
 		c.replyError("internal", "Внутренняя ошибка сервера", reqID, lotID)
 	}
 }

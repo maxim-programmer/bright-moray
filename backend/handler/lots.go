@@ -139,7 +139,7 @@ func (h *Handler) CreateLot(w http.ResponseWriter, r *http.Request, uid int64) {
 		return
 	}
 	h.hub.LotCreated(lot.ID, time.UnixMilli(lot.EndsAt)) // таймер завершения аукциона
-	logging.FromContext(r.Context(), logging.ComponentHandler).Info("лот создан", zap.Int64("lot_id", lot.ID))
+	logging.FromContext(r.Context(), logging.ComponentHandler).Info("lot created", zap.Int64("lot_id", lot.ID))
 	writeJSON(w, http.StatusCreated, lot)
 }
 

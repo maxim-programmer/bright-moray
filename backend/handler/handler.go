@@ -100,7 +100,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 		// Статус и заголовки уже отправлены, ответить иначе нельзя. Чаще всего это обрыв
 		// соединения клиентом; запроса здесь нет, поэтому пишем логгером по умолчанию.
 		logging.Default().With(zap.String("component", logging.ComponentHandler)).
-			Warn("не удалось записать ответ", zap.Error(err))
+			Warn("failed to write response", zap.Error(err))
 	}
 }
 
@@ -126,7 +126,7 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		if logging.RequestFrom(r.Context()) != nil {
 			logging.SetError(r.Context(), err)
 		} else { // вызвано не через Middleware (например, в тесте) — пишем сразу
-			logging.FromContext(r.Context(), logging.ComponentHandler).Error("внутренняя ошибка", zap.Error(err))
+			logging.FromContext(r.Context(), logging.ComponentHandler).Error("internal error", zap.Error(err))
 		}
 		writeError(w, http.StatusInternalServerError, "internal", "Внутренняя ошибка сервера")
 	}

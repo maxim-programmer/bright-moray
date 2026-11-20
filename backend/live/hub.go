@@ -23,12 +23,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"go.uber.org/zap"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -150,7 +151,7 @@ func (h *Hub) Start(ctx context.Context) error {
 	for _, e := range ends {
 		h.schedule(e.ID, e.Left)
 	}
-	h.log.Info("запланировано завершение активных лотов", zap.Int("lots", len(ends)))
+	h.log.Info("scheduled finish for active lots", zap.Int("lots", len(ends)))
 	return nil
 }
 
@@ -242,9 +243,9 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, uid int64) {
 	}
 	defer func() {
 		h.unregister(c)
-		c.log().Debug("WebSocket отключён")
+		c.log().Debug("websocket disconnected")
 	}()
-	c.log().Debug("WebSocket подключён")
+	c.log().Debug("websocket connected")
 
 	go c.writeLoop()
 	c.sendHello()
@@ -323,7 +324,7 @@ func (h *Hub) removeSub(c *client, lotID int64) {
 func (h *Hub) publish(lotID int64, v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		h.log.Error("сериализация события", zap.Int64("lot_id", lotID), zap.Error(err))
+		h.log.Error("failed to marshal event", zap.Int64("lot_id", lotID), zap.Error(err))
 		return
 	}
 	var slow []*client
@@ -335,7 +336,7 @@ func (h *Hub) publish(lotID int64, v any) {
 	}
 	h.mu.RUnlock()
 	for _, c := range slow {
-		c.log().Warn("отключён медленный клиент", zap.Int64("lot_id", lotID))
+		c.log().Warn("slow client disconnected", zap.Int64("lot_id", lotID))
 		c.conn.Close()
 	}
 }
@@ -369,11 +370,11 @@ func (h *Hub) PlaceBid(ctx context.Context, lotID, userID int64, amount int) (Pl
 	defer cancel()
 	live, err := h.store.GetLotLive(bg, lotID)
 	if err != nil {
-		h.logger(ctx).Error("состояние лота после ставки", zap.Int64("lot_id", lotID), zap.Error(err))
+		h.logger(ctx).Error("failed to load lot state after bid", zap.Int64("lot_id", lotID), zap.Error(err))
 		return out, nil
 	}
 	out.Lot = &live
-	h.logger(ctx).Info("ставка принята", zap.Int64("lot_id", lotID))
+	h.logger(ctx).Info("bid placed", zap.Int64("lot_id", lotID))
 	h.publish(lotID, bidEvent{
 		Type: "bid", LotID: lotID, Bid: res.Bid, Lot: live, Extended: res.Extended, Now: nowMs(),
 	})
@@ -395,10 +396,10 @@ func (h *Hub) CancelLot(ctx context.Context, lotID, userID int64) error {
 	defer cancel()
 	live, err := h.store.GetLotLive(bg, lotID)
 	if err != nil {
-		h.logger(ctx).Error("состояние лота после отмены", zap.Int64("lot_id", lotID), zap.Error(err))
+		h.logger(ctx).Error("failed to load lot state after cancel", zap.Int64("lot_id", lotID), zap.Error(err))
 		return nil
 	}
-	h.logger(ctx).Info("лот отменён", zap.Int64("lot_id", lotID))
+	h.logger(ctx).Info("lot cancelled", zap.Int64("lot_id", lotID))
 	h.publish(lotID, lotEvent{Type: "lot_cancelled", LotID: lotID, Lot: live, Now: nowMs()})
 	return nil
 }
@@ -479,7 +480,7 @@ func (h *Hub) finish(lotID int64, gen uint64) {
 		h.dropTimer(lotID, gen)
 		return
 	case err != nil:
-		h.log.Error("проверка срока лота", zap.Int64("lot_id", lotID), zap.Error(err))
+		h.log.Error("failed to check lot deadline", zap.Int64("lot_id", lotID), zap.Error(err))
 		h.schedule(lotID, retryAfterError-h.opts.FinishSlack)
 		return
 	case status == "cancelled":
@@ -492,12 +493,12 @@ func (h *Hub) finish(lotID int64, gen uint64) {
 
 	live, err := h.store.GetLotLive(ctx, lotID)
 	if err != nil {
-		h.log.Error("состояние лота при завершении", zap.Int64("lot_id", lotID), zap.Error(err))
+		h.log.Error("failed to load lot state on finish", zap.Int64("lot_id", lotID), zap.Error(err))
 		h.schedule(lotID, retryAfterError-h.opts.FinishSlack)
 		return
 	}
 	h.dropTimer(lotID, gen)
-	h.log.Info("аукцион завершён", zap.Int64("lot_id", lotID))
+	h.log.Info("auction finished", zap.Int64("lot_id", lotID))
 	h.publish(lotID, lotEvent{Type: "lot_finished", LotID: lotID, Lot: live, Now: nowMs()})
 }
 

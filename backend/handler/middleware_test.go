@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"auction/config"
+	"auction/db"
+	"auction/logging"
 	"bufio"
 	"errors"
 	"net"
@@ -13,10 +16,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
-
-	"auction/config"
-	"auction/db"
-	"auction/logging"
 )
 
 // reqlogObserve подменяет логгер по умолчанию на наблюдателя и возвращает его записи.
@@ -220,7 +219,7 @@ func TestReqLogPanic(t *testing.T) {
 		t.Fatalf("ожидались запись о panic и access-запись, получено %d: %v", len(all), all)
 	}
 	p, acc := all[0], all[1]
-	if p.Message != "panic в обработчике" || p.Level != zapcore.ErrorLevel {
+	if p.Message != "panic in handler" || p.Level != zapcore.ErrorLevel {
 		t.Errorf("panic: %q %v", p.Message, p.Level)
 	}
 	if p.ContextMap()["error"] != "panic: boom" || p.ContextMap()["user_id"] != int64(3) {

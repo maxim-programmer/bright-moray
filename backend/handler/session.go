@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"auction/auth"
+	"auction/db"
+	"auction/logging"
 	"context"
 	"errors"
 	"net/http"
@@ -8,10 +11,6 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-
-	"auction/auth"
-	"auction/db"
-	"auction/logging"
 )
 
 const (
@@ -84,7 +83,7 @@ func (h *Handler) startSession(w http.ResponseWriter, r *http.Request, userID in
 	if old, ok := refreshHash(r); ok {
 		if err := h.q.RevokeSessionByRefreshHash(r.Context(), old, db.RevokeRelogin); err != nil {
 			logging.FromContext(r.Context(), logging.ComponentAuth).
-				Warn("не удалось закрыть прежнюю сессию", zap.Error(err))
+				Warn("failed to revoke previous session", zap.Error(err))
 		}
 	}
 	token, hash, err := auth.NewRefreshToken()
@@ -164,7 +163,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, db.ErrRefreshReused):
 		logging.SetUser(r.Context(), st.UserID)
 		logging.FromContext(r.Context(), logging.ComponentAuth).
-			Warn("повторное использование refresh-токена, сессии отозваны")
+			Warn("refresh token reuse detected, sessions revoked")
 		h.clearAuthCookies(w)
 		writeError(w, http.StatusUnauthorized, "refresh_reused", "Сессия завершена из соображений безопасности, войдите заново")
 		return
@@ -244,9 +243,9 @@ func (h *Handler) StartSessionCleanup(ctx context.Context) {
 			cancel()
 			switch {
 			case err != nil && ctx.Err() == nil:
-				lg.Error("очистка истёкших сессий", zap.Error(err))
+				lg.Error("expired sessions cleanup failed", zap.Error(err))
 			case n > 0:
-				lg.Info("удалены токены истёкших сессий", zap.Int64("count", n))
+				lg.Info("expired session tokens deleted", zap.Int64("count", n))
 			}
 			select {
 			case <-ctx.Done():
