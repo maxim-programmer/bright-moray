@@ -37,8 +37,11 @@ services:
       ANTI_SNIPE_EXTEND_SEC: ${ANTI_SNIPE_EXTEND_SEC:-120}
       WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-}
       UPLOAD_DIR: /data/uploads
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FILE: /data/logs/app.log
     volumes:
       - uploads_data:/data/uploads
+      - logs_data:/data/logs
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 10s
@@ -60,3 +63,4 @@ services:
 volumes:
   postgres_data:
   uploads_data:
+  logs_data:

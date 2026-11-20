@@ -13,6 +13,7 @@ dist/
 Thumbs.db
 
 *.log
+logs/
 
 *.exe
 bin/

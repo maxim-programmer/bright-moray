@@ -11,7 +11,7 @@ FROM alpine:3.20
 
 RUN apk --no-cache add ca-certificates \
     && adduser -D -u 10001 app \
-    && mkdir -p /data/uploads && chown app:app /data/uploads
+    && mkdir -p /data/uploads /data/logs && chown app:app /data/uploads /data/logs
 
 USER app
 COPY --from=builder /server /server
