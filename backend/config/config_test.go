@@ -30,7 +30,7 @@ func TestNormalizeOrigin(t *testing.T) {
 
 func setEnv(t *testing.T, kv map[string]string) {
 	t.Helper()
-	for _, k := range []string{"JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE", "ALLOWED_ORIGINS", "WS_ALLOWED_ORIGINS", "REFRESH_REUSE_GAP_SEC", "COOKIE_SECURE"} {
+	for _, k := range []string{"JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE", "ALLOWED_ORIGINS", "WS_ALLOWED_ORIGINS", "REFRESH_REUSE_GAP_SEC", "COOKIE_SECURE", "LOG_LEVEL", "LOG_FILE"} {
 		t.Setenv(k, "")
 	}
 	for k, v := range kv {
@@ -99,5 +99,32 @@ func TestApplyDefaultsKeepsExplicitValues(t *testing.T) {
 	c.ApplyDefaults()
 	if c.AccessTokenTTL != time.Minute || c.JWTIssuer != "x" || c.JWTAudience != DefaultJWTAudience {
 		t.Fatalf("%+v", c)
+	}
+}
+
+func TestLoadLogging(t *testing.T) {
+	setEnv(t, map[string]string{"JWT_SECRET": "0123456789abcdef0123"})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogLevel != "info" || cfg.LogFile != "" {
+		t.Errorf("по умолчанию: level=%q file=%q", cfg.LogLevel, cfg.LogFile)
+	}
+
+	setEnv(t, map[string]string{"JWT_SECRET": "0123456789abcdef0123", "LOG_LEVEL": " DEBUG ", "LOG_FILE": " /data/logs/app.log "})
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogLevel != "debug" || cfg.LogFile != "/data/logs/app.log" {
+		t.Errorf("level=%q file=%q", cfg.LogLevel, cfg.LogFile)
+	}
+
+	for _, bad := range []string{"loud", "fatal", "warning", "5"} {
+		setEnv(t, map[string]string{"JWT_SECRET": "0123456789abcdef0123", "LOG_LEVEL": bad})
+		if _, err := Load(); err == nil {
+			t.Errorf("LOG_LEVEL=%q принят", bad)
+		}
 	}
 }

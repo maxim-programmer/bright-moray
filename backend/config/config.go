@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"auction/logging"
 )
 
 type Config struct {
@@ -22,6 +24,10 @@ type Config struct {
 	JWTAudience  string // claim aud access-токена
 	UploadDir    string // куда сохраняются загруженные картинки
 	CookieSecure bool   // true, если сайт отдаётся по HTTPS
+
+	// Логирование. Консоль (stdout) пишется всегда; JSON-файл — только если задан LogFile.
+	LogLevel string // debug, info, warn или error
+	LogFile  string // путь к JSON-файлу лога (с ротацией); пусто — файла нет
 
 	// Anti-snipe: ставка, сделанная меньше чем за AntiSnipeWindow до конца аукциона,
 	// продлевает его так, чтобы до конца оставалось не меньше AntiSnipeExtend.
@@ -90,6 +96,14 @@ func Load() (Config, error) {
 		JWTAudience:  env("JWT_AUDIENCE", DefaultJWTAudience),
 		UploadDir:    env("UPLOAD_DIR", "./uploads"),
 		CookieSecure: strings.EqualFold(os.Getenv("COOKIE_SECURE"), "true"),
+		LogLevel:     strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL"))),
+		LogFile:      strings.TrimSpace(os.Getenv("LOG_FILE")),
+	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "info"
+	}
+	if _, err := logging.ParseLevel(cfg.LogLevel); err != nil {
+		return cfg, fmt.Errorf("LOG_LEVEL: %w", err)
 	}
 	if len(cfg.JWTSecret) < 16 {
 		return cfg, errors.New("JWT_SECRET должен быть задан и содержать не менее 16 символов")
