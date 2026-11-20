@@ -5,18 +5,18 @@ import (
 	"auction/config"
 	"auction/db"
 	"auction/live"
+	"auction/logging"
 	"auction/model"
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net"
 	"net/http"
-	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const maxJSONBody = 1 << 20
@@ -27,12 +27,26 @@ type Handler struct {
 	jwt       *auth.JWT // access-токены
 	loginRate *limiter
 	hub       *live.Hub // WebSocket-рассылка, таймеры завершения, Anti-snipe
+	log       *zap.Logger
 	// хеш-пустышка: сравниваем с ним, когда пользователь не найден,
 	// чтобы время ответа не выдавало существование никнейма
 	dummyHash []byte
 }
 
-func New(q *db.Queries, cfg config.Config) *Handler {
+// Option настраивает Handler.
+type Option func(*Handler)
+
+// WithLogger задаёт логгер для работы вне запросов (очистка сессий) и для WebSocket-хаба.
+// По умолчанию берётся logging.Default() на момент создания Handler.
+func WithLogger(l *zap.Logger) Option {
+	return func(h *Handler) {
+		if l != nil {
+			h.log = l
+		}
+	}
+}
+
+func New(q *db.Queries, cfg config.Config, opts ...Option) *Handler {
 	cfg.ApplyDefaults()
 	jwt, err := auth.NewJWT(auth.Options{
 		Secret:   []byte(cfg.JWTSecret),
@@ -43,17 +57,31 @@ func New(q *db.Queries, cfg config.Config) *Handler {
 	if err != nil { // конфигурация проверяется в config.Load; сюда попадаем только при ошибке сборки
 		panic(err)
 	}
-	return &Handler{
+	h := &Handler{
 		q:         q,
 		cfg:       cfg,
 		jwt:       jwt,
 		loginRate: newLimiter(10, 5*time.Minute),
-		hub: live.New(q, live.Options{
-			AntiSnipe:      db.AntiSnipe{Window: cfg.AntiSnipeWindow, Extend: cfg.AntiSnipeExtend},
-			AllowedOrigins: cfg.WSAllowedOrigins,
-		}),
 		dummyHash: mustHash("dummy-password"),
 	}
+	for _, o := range opts {
+		o(h)
+	}
+	h.log = h.logger()
+	h.hub = live.New(q, live.Options{
+		AntiSnipe:      db.AntiSnipe{Window: cfg.AntiSnipeWindow, Extend: cfg.AntiSnipeExtend},
+		AllowedOrigins: cfg.WSAllowedOrigins,
+		Logger:         h.log,
+	})
+	return h
+}
+
+// logger — логгер для работы вне запросов; без явного WithLogger это logging.Default().
+func (h *Handler) logger() *zap.Logger {
+	if h.log != nil {
+		return h.log
+	}
+	return logging.Default()
 }
 
 // StartLive запускает реалтайм-часть: ставит таймеры завершения на активные лоты.
@@ -69,7 +97,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("encode response: %v", err)
+		// Статус и заголовки уже отправлены, ответить иначе нельзя. Чаще всего это обрыв
+		// соединения клиентом; запроса здесь нет, поэтому пишем логгером по умолчанию.
+		logging.Default().With(zap.String("component", logging.ComponentHandler)).
+			Warn("не удалось записать ответ", zap.Error(err))
 	}
 }
 
@@ -78,7 +109,11 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 }
 
 // fail переводит ошибку слоя данных в HTTP-ответ.
-func fail(w http.ResponseWriter, err error) {
+//
+// Неожиданная ошибка (500) не логируется здесь отдельной записью: она запоминается в
+// состоянии запроса, и Middleware пишет одну строку с методом, путём, статусом,
+// временем и error. Так одна неудача не превращается в две ERROR-записи.
+func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var ae *model.APIError
 	switch {
 	case errors.As(err, &ae):
@@ -88,7 +123,11 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, context.Canceled):
 		// клиент ушёл — отвечать некому
 	default:
-		log.Printf("internal error: %v", err)
+		if logging.RequestFrom(r.Context()) != nil {
+			logging.SetError(r.Context(), err)
+		} else { // вызвано не через Middleware (например, в тесте) — пишем сразу
+			logging.FromContext(r.Context(), logging.ComponentHandler).Error("внутренняя ошибка", zap.Error(err))
+		}
 		writeError(w, http.StatusInternalServerError, "internal", "Внутренняя ошибка сервера")
 	}
 }
@@ -164,48 +203,6 @@ func clientIP(r *http.Request) string {
 
 /* ---------- middleware ---------- */
 
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (s *statusRecorder) WriteHeader(code int) {
-	s.status = code
-	s.ResponseWriter.WriteHeader(code)
-}
-
-// Unwrap позволяет http.ResponseController добраться до настоящего ResponseWriter.
-func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
-
-// Hijack нужен для апгрейда до WebSocket: без него обёртка скрывала бы http.Hijacker.
-// В лог при этом попадает 101, а не 200.
-func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	conn, rw, err := http.NewResponseController(s.ResponseWriter).Hijack()
-	if err == nil {
-		s.status = http.StatusSwitchingProtocols
-	}
-	return conn, rw, err
-}
-
-// Middleware: восстановление после паники, лог запросов, базовые заголовки безопасности.
-func Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		defer func() {
-			if p := recover(); p != nil {
-				log.Printf("panic: %v\n%s", p, debug.Stack())
-				writeError(rec, http.StatusInternalServerError, "internal", "Внутренняя ошибка сервера")
-			}
-			log.Printf("%s %s %d %s", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
-		}()
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "same-origin")
-		next.ServeHTTP(rec, r)
-	})
-}
-
 /* ---------- маршруты ---------- */
 
 func SetupRoutes(mux *http.ServeMux, h *Handler) {
@@ -265,7 +262,7 @@ func (h *Handler) ServerTime(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetCategories(w http.ResponseWriter, r *http.Request) {
 	cats, err := h.q.GetCategories(r.Context())
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, cats)
@@ -274,7 +271,7 @@ func (h *Handler) GetCategories(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetDorms(w http.ResponseWriter, r *http.Request) {
 	dorms, err := h.q.GetDorms(r.Context())
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, dorms)

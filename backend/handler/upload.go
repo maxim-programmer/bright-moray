@@ -4,10 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"go.uber.org/zap"
+
+	"auction/logging"
 )
 
 const maxUpload = 5 << 20 // 5 МБ
@@ -43,37 +46,37 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request, uid int64) {
 		return
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	name := hex.EncodeToString(raw) + ext
 
 	if err := os.MkdirAll(h.cfg.UploadDir, 0o755); err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	dst, err := os.OpenFile(filepath.Join(h.cfg.UploadDir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	if _, err := io.Copy(dst, io.LimitReader(file, maxUpload)); err != nil {
 		dst.Close()
 		os.Remove(dst.Name())
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	if err := dst.Close(); err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
-	log.Printf("upload: user=%d file=%s", uid, name)
+	logging.FromContext(r.Context(), logging.ComponentHandler).Info("файл загружен", zap.String("file", name))
 	writeJSON(w, http.StatusCreated, map[string]string{"url": "/uploads/" + name})
 }
 

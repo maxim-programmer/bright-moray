@@ -2,15 +2,16 @@ package handler
 
 import (
 	"errors"
-	"log"
 	"net/http"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 
 	"auction/db"
+	"auction/logging"
 )
 
 var (
@@ -97,7 +98,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	user, err := h.q.CreateUser(r.Context(), req.Username, string(hash), req.Name, req.Telegram, req.DormID)
@@ -113,11 +114,11 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "validation", "Выберите общежитие из списка")
 		return
 	case err != nil:
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	if err := h.startSession(w, r, user.ID); err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, user)
@@ -146,7 +147,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	okPass := bcrypt.CompareHashAndPassword(hash, []byte(req.Password)) == nil
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	if err != nil || !okPass {
@@ -156,7 +157,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	h.loginRate.reset(ip)
 	if err := h.startSession(w, r, user.ID); err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
@@ -170,7 +171,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request, uid int64) {
 		return
 	}
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
@@ -206,7 +207,7 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request, uid int6
 	case errors.Is(err, db.ErrBadRef):
 		writeError(w, http.StatusBadRequest, "validation", "Выберите общежитие из списка")
 	case err != nil:
-		fail(w, err)
+		fail(w, r, err)
 	default:
 		writeJSON(w, http.StatusOK, user)
 	}
@@ -236,7 +237,7 @@ func (h *Handler) ChangeUsername(w http.ResponseWriter, r *http.Request, uid int
 		return
 	}
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
@@ -259,7 +260,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request, uid int
 	}
 	user, err := h.q.GetUserByID(r.Context(), uid)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Current)) != nil {
@@ -276,18 +277,19 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request, uid int
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	// Все сессии пользователя (на всех устройствах) отзываются в той же транзакции.
 	if err := h.q.ChangePassword(r.Context(), uid, string(hash)); err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	// Это устройство остаётся в аккаунте: ему сразу открывается новая сессия.
 	// Если не получилось — просто стираем cookie, и пользователь войдёт с новым паролем.
 	if err := h.startSession(w, r, uid); err != nil {
-		log.Printf("auth: сессия после смены пароля: %v", err)
+		logging.FromContext(r.Context(), logging.ComponentAuth).
+			Warn("не удалось открыть сессию после смены пароля", zap.Error(err))
 		h.clearAuthCookies(w)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

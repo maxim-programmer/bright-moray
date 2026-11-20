@@ -3,13 +3,15 @@ package handler
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"auction/auth"
 	"auction/db"
+	"auction/logging"
 )
 
 const (
@@ -78,9 +80,11 @@ func refreshHash(r *http.Request) ([]byte, bool) {
 // Если в запросе уже была сессия этого браузера, она закрывается — чтобы повторный вход
 // не оставлял за собой «осиротевших» токенов.
 func (h *Handler) startSession(w http.ResponseWriter, r *http.Request, userID int64) error {
+	logging.SetUser(r.Context(), userID) // вход и регистрация: пользователь известен только сейчас
 	if old, ok := refreshHash(r); ok {
 		if err := h.q.RevokeSessionByRefreshHash(r.Context(), old, db.RevokeRelogin); err != nil {
-			log.Printf("auth: не удалось закрыть прежнюю сессию: %v", err)
+			logging.FromContext(r.Context(), logging.ComponentAuth).
+				Warn("не удалось закрыть прежнюю сессию", zap.Error(err))
 		}
 	}
 	token, hash, err := auth.NewRefreshToken()
@@ -102,6 +106,12 @@ func (h *Handler) startSession(w http.ResponseWriter, r *http.Request, userID in
 // Authorization: Bearer (для не-браузерных клиентов). Refresh-токен здесь не годится:
 // это не JWT и проверку подписи он не пройдёт. БД не используется.
 func (h *Handler) userID(r *http.Request) int64 {
+	uid := h.accessUserID(r)
+	logging.SetUser(r.Context(), uid) // с этого момента записи запроса получают user_id
+	return uid
+}
+
+func (h *Handler) accessUserID(r *http.Request) int64 {
 	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
 		if cl, err := h.jwt.Verify(c.Value); err == nil {
 			return cl.Subject
@@ -140,7 +150,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	token, hash, err := auth.NewRefreshToken()
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 
@@ -152,7 +162,9 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "refresh_conflict", "Сессия только что обновлена, повторите запрос")
 		return
 	case errors.Is(err, db.ErrRefreshReused):
-		log.Printf("auth: повторное использование refresh-токена, сессии отозваны user=%d", st.UserID)
+		logging.SetUser(r.Context(), st.UserID)
+		logging.FromContext(r.Context(), logging.ComponentAuth).
+			Warn("повторное использование refresh-токена, сессии отозваны")
 		h.clearAuthCookies(w)
 		writeError(w, http.StatusUnauthorized, "refresh_reused", "Сессия завершена из соображений безопасности, войдите заново")
 		return
@@ -161,13 +173,14 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid_refresh", "Сессия недействительна, войдите заново")
 		return
 	case err != nil:
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 
+	logging.SetUser(r.Context(), st.UserID)
 	accessExp, err := h.setAuthCookies(w, st.UserID, token, st.TTL)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -181,7 +194,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	if old, ok := refreshHash(r); ok {
 		if err := h.q.RevokeSessionByRefreshHash(r.Context(), old, db.RevokeLogout); err != nil {
-			fail(w, err) // cookie не стираем: токен ещё жив, пусть клиент повторит выход
+			fail(w, r, err) // cookie не стираем: токен ещё жив, пусть клиент повторит выход
 			return
 		}
 	}
@@ -198,9 +211,10 @@ func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request) {
 		if old, ok := refreshHash(r); ok {
 			var err error
 			if uid, err = h.q.UserIDByActiveRefreshHash(r.Context(), old); err != nil && !errors.Is(err, db.ErrNotFound) {
-				fail(w, err)
+				fail(w, r, err)
 				return
 			}
+			logging.SetUser(r.Context(), uid)
 		}
 	}
 	if uid == 0 {
@@ -208,7 +222,7 @@ func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := h.q.RevokeUserSessions(r.Context(), uid, db.RevokeLogoutAll); err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	h.clearAuthCookies(w)
@@ -220,6 +234,7 @@ func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request) {
 // StartSessionCleanup раз в час удаляет историю токенов давно истёкших сессий.
 // Работает до отмены ctx. Вызывать один раз при старте.
 func (h *Handler) StartSessionCleanup(ctx context.Context) {
+	lg := h.logger().With(zap.String("component", logging.ComponentAuth))
 	go func() {
 		t := time.NewTicker(sessionCleanupEvery)
 		defer t.Stop()
@@ -229,9 +244,9 @@ func (h *Handler) StartSessionCleanup(ctx context.Context) {
 			cancel()
 			switch {
 			case err != nil && ctx.Err() == nil:
-				log.Printf("auth: очистка сессий: %v", err)
+				lg.Error("очистка истёкших сессий", zap.Error(err))
 			case n > 0:
-				log.Printf("auth: удалено токенов истёкших сессий: %d", n)
+				lg.Info("удалены токены истёкших сессий", zap.Int64("count", n))
 			}
 			select {
 			case <-ctx.Done():

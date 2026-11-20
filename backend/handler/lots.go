@@ -2,6 +2,7 @@ package handler
 
 import (
 	"auction/db"
+	"auction/logging"
 	"auction/model"
 	"errors"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -48,7 +51,7 @@ func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
 
 	total, err := h.q.CountLots(r.Context(), f)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	pages := (total + db.PageSize - 1) / db.PageSize
@@ -64,7 +67,7 @@ func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
 	}
 	lots, err := h.q.ListLots(r.Context(), h.userID(r), f, db.PageSize, (page-1)*db.PageSize)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -118,7 +121,7 @@ func (h *Handler) CreateLot(w http.ResponseWriter, r *http.Request, uid int64) {
 	}
 	ok, err := h.q.SubcategoryExists(r.Context(), req.Category, req.Subcategory)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	if !ok {
@@ -132,10 +135,11 @@ func (h *Handler) CreateLot(w http.ResponseWriter, r *http.Request, uid int64) {
 		StartPrice: req.StartPrice, Step: req.Step, Hours: req.Hours,
 	})
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	h.hub.LotCreated(lot.ID, time.UnixMilli(lot.EndsAt)) // таймер завершения аукциона
+	logging.FromContext(r.Context(), logging.ComponentHandler).Info("лот создан", zap.Int64("lot_id", lot.ID))
 	writeJSON(w, http.StatusCreated, lot)
 }
 
@@ -151,7 +155,7 @@ func (h *Handler) GetLot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, lot)
@@ -168,12 +172,12 @@ func (h *Handler) CancelLot(w http.ResponseWriter, r *http.Request, uid int64) {
 			writeError(w, http.StatusNotFound, "not_found", "Лот не найден")
 			return
 		}
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	lot, err := h.q.GetLot(r.Context(), uid, id)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, lot)
@@ -187,7 +191,7 @@ func (h *Handler) SimilarLots(w http.ResponseWriter, r *http.Request) {
 	}
 	lots, err := h.q.SimilarLots(r.Context(), h.userID(r), id, 4)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, lots)
@@ -196,7 +200,7 @@ func (h *Handler) SimilarLots(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RandomLot(w http.ResponseWriter, r *http.Request) {
 	id, err := h.q.RandomLotID(r.Context(), r.URL.Query().Get("category"), r.URL.Query().Get("sub"))
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	if id == 0 {
@@ -211,7 +215,7 @@ func (h *Handler) RandomLot(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) MyLots(w http.ResponseWriter, r *http.Request, uid int64) {
 	lots, err := h.q.ListLots(r.Context(), uid, model.LotFilter{Status: "all", AuthorID: uid}, 0, 0)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, lots)
@@ -220,7 +224,7 @@ func (h *Handler) MyLots(w http.ResponseWriter, r *http.Request, uid int64) {
 func (h *Handler) MyBidLots(w http.ResponseWriter, r *http.Request, uid int64) {
 	lots, err := h.q.ListLots(r.Context(), uid, model.LotFilter{Status: "all", BidderID: uid}, 0, 0)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, lots)
@@ -229,7 +233,7 @@ func (h *Handler) MyBidLots(w http.ResponseWriter, r *http.Request, uid int64) {
 func (h *Handler) MyStats(w http.ResponseWriter, r *http.Request, uid int64) {
 	stats, err := h.q.GetUserStats(r.Context(), uid)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
@@ -249,7 +253,7 @@ func (h *Handler) GetLotBids(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, bids)
@@ -279,12 +283,12 @@ func (h *Handler) PlaceBid(w http.ResponseWriter, r *http.Request, uid int64) {
 		return
 	}
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	lot, err := h.q.GetLot(r.Context(), uid, id)
 	if err != nil {
-		fail(w, err)
+		fail(w, r, err)
 		return
 	}
 	// extended = true: ставка сработала как Anti-snipe, lot.endsAt уже продлён
