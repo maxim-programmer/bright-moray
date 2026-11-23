@@ -20,6 +20,9 @@ import { state } from '../store'
         </router-link>
       </nav>
       <div class="nav-auth">
+        <router-link v-if="state.user && state.user.role === 'admin'" to="/admin" class="button small outline-white admin-button">
+          Панель администратора
+        </router-link>
         <template v-if="!state.user">
           <router-link to="/login" class="nav-link">Вход</router-link>
           <router-link to="/register" class="button small outline-white">Регистрация</router-link>

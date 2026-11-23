@@ -20,6 +20,24 @@ const router = createRouter({
     { path: '/create', component: CreateLotView, meta: { needAuth: true } },
     { path: '/profile', component: ProfileView, meta: { needAuth: true } },
     { path: '/settings', component: SettingsView, meta: { needAuth: true } },
+    {
+      // Панель администратора. Роль проверяет и сервер (каждый /api/admin/* — 403 для не-админа),
+      // здесь только не показываем обычному пользователю пустые страницы.
+      path: '/admin',
+      component: () => import('./views/admin/AdminView.vue'),
+      meta: { needAuth: true, needAdmin: true },
+      children: [
+        { path: '', component: () => import('./views/admin/AdminStats.vue') },
+        { path: 'users', component: () => import('./views/admin/AdminUsers.vue') },
+        { path: 'users/:id', component: () => import('./views/admin/AdminUserView.vue') },
+        { path: 'lots', component: () => import('./views/admin/AdminLots.vue') },
+        { path: 'lots/:id', component: () => import('./views/admin/AdminLotView.vue') },
+        { path: 'auctions', component: () => import('./views/admin/AdminAuctions.vue') },
+        { path: 'auctions/:id', component: () => import('./views/admin/AdminAuctionView.vue') },
+        { path: 'events', component: () => import('./views/admin/AdminEvents.vue') },
+        { path: 'settings', component: () => import('./views/admin/AdminSettings.vue') }
+      ]
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' }
   ],
   scrollBehavior(to, from, saved) {
@@ -35,6 +53,9 @@ router.beforeEach(async (to) => {
   await initSession()
   if (to.meta.needAuth && !state.user) {
     return { path: '/login', query: { redirect: to.fullPath } }
+  }
+  if (to.meta.needAdmin && state.user.role !== 'admin') {
+    return '/'
   }
   // уже вошедшему нечего делать на страницах входа и регистрации
   if (to.meta.guestOnly && state.user) {

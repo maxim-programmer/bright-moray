@@ -5,7 +5,7 @@ import { state } from './store'
 
 <template>
   <AppHeader />
-  <main class="container" :class="{ wide: $route.path === '/lots' || $route.path === '/' }">
+  <main class="container" :class="{ wide: $route.path === '/lots' || $route.path === '/' || $route.path.startsWith('/admin') }">
     <div v-if="state.initError" class="error">{{ state.initError }}</div>
     <!-- ключ по path, а не fullPath: смена фильтров (query) не пересоздаёт страницу -->
     <router-view :key="$route.path" />

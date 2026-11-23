@@ -1,0 +1,132 @@
+<script setup>
+import { ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
+import Pagination from '../../components/Pagination.vue'
+import { adminApi } from '../../api'
+import { formatDate } from '../../store'
+import { describeEvent, dayStart, dayEnd } from './format'
+import { useLoader } from './useAdmin'
+
+const route = useRoute()
+const str = (v) => (typeof v === 'string' ? v : '')
+
+const userId = ref(str(route.query.userId))
+const lotId = ref(str(route.query.lotId))
+const type = ref('')
+const byAdmin = ref(false)
+const from = ref('')
+const to = ref('')
+const page = ref(1)
+
+const events = ref([])
+const total = ref(0)
+const totalPages = ref(1)
+const types = ref({ types: [], groups: [] })
+
+const loader = useLoader(() =>
+  adminApi.events({
+    userId: userId.value.trim(),
+    lotId: lotId.value.trim(),
+    type: type.value,
+    byAdmin: byAdmin.value ? 'true' : '',
+    from: dayStart(from.value),
+    to: dayEnd(to.value),
+    page: page.value
+  })
+)
+
+async function load() {
+  const data = await loader.run()
+  if (!data) return
+  events.value = data.events
+  total.value = data.total
+  totalPages.value = data.totalPages
+}
+
+function reload() {
+  page.value = 1
+  load()
+}
+
+function reset() {
+  userId.value = ''
+  lotId.value = ''
+  type.value = ''
+  byAdmin.value = false
+  from.value = ''
+  to.value = ''
+  reload()
+}
+
+function goTo(p) {
+  page.value = p
+  load()
+}
+
+onMounted(() => {
+  adminApi.eventTypes().then((t) => (types.value = t), () => {})
+  load()
+})
+</script>
+
+<template>
+  <form class="admin-bar" @submit.prevent="reload">
+    <label class="field">
+      ID пользователя
+      <input v-model="userId" type="number" min="1" placeholder="любой" />
+    </label>
+    <label class="field">
+      № лота
+      <input v-model="lotId" type="number" min="1" placeholder="любой" />
+    </label>
+    <label class="field">
+      Тип события
+      <select v-model="type" @change="reload">
+        <option value="">Все события</option>
+        <optgroup label="Группы">
+          <option v-for="g in types.groups" :key="g.type" :value="g.type">{{ g.label }}</option>
+        </optgroup>
+        <optgroup label="События">
+          <option v-for="t in types.types" :key="t.type" :value="t.type">{{ t.label }}</option>
+        </optgroup>
+      </select>
+    </label>
+    <label class="field">С даты<input v-model="from" type="date" @change="reload" /></label>
+    <label class="field">По дату<input v-model="to" type="date" @change="reload" /></label>
+    <label class="check"><input v-model="byAdmin" type="checkbox" @change="reload" /> Только действия администраторов</label>
+    <button class="button" type="submit">Применить</button>
+    <button class="button light" type="button" @click="reset">Сбросить</button>
+  </form>
+
+  <div v-if="loader.error.value" class="error">{{ loader.error.value }}</div>
+  <p class="muted small">Записей: {{ total }}</p>
+
+  <div class="admin-table-wrap">
+    <div v-if="!events.length && !loader.loading.value" class="admin-empty">Событий не найдено.</div>
+    <table v-else class="admin-table">
+      <thead>
+        <tr><th>Время</th><th>Событие</th><th>Пользователь</th><th>Исполнитель</th><th>Лот</th><th>Подробности</th></tr>
+      </thead>
+      <tbody>
+        <tr v-for="e in events" :key="e.id">
+          <td class="nowrap">{{ formatDate(e.createdAt) }}</td>
+          <td>{{ e.label }}</td>
+          <td>
+            <router-link v-if="e.userId" :to="'/admin/users/' + e.userId" class="admin-link">{{ e.username || '№' + e.userId }}</router-link>
+            <span v-else class="muted">—</span>
+          </td>
+          <td>
+            <template v-if="e.actorId">
+              <router-link :to="'/admin/users/' + e.actorId" class="admin-link">{{ e.actorUsername || '№' + e.actorId }}</router-link>
+              <span v-if="e.byAdmin" class="pill good">админ</span>
+            </template>
+            <span v-else class="muted">{{ e.byAdmin ? 'терминал' : 'система' }}</span>
+          </td>
+          <td><router-link v-if="e.lotId" :to="'/admin/lots/' + e.lotId" class="admin-link">№{{ e.lotId }}</router-link></td>
+          <td class="details">{{ describeEvent(e) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <Pagination :page="page" :total-pages="totalPages" @change="goTo" />
+</template>
