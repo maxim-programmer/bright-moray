@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"go.uber.org/zap"
@@ -76,14 +75,16 @@ func (h *Handler) ListLots(w http.ResponseWriter, r *http.Request) {
 }
 
 type createLotReq struct {
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Image       string  `json:"image"` // url из POST /api/uploads
-	Category    string  `json:"category"`
-	Subcategory string  `json:"subcategory"`
-	StartPrice  int     `json:"startPrice"`
-	Step        int     `json:"step"`
-	Hours       float64 `json:"hours"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Image       string `json:"image"` // url из POST /api/uploads
+	Category    string `json:"category"`
+	Subcategory string `json:"subcategory"`
+	StartPrice  int    `json:"startPrice"`
+	Step        int    `json:"step"`
+	// Hours — длительность аукциона. Не указана — берётся время автозавершения по умолчанию
+	// из системных настроек.
+	Hours *float64 `json:"hours"`
 }
 
 func (h *Handler) CreateLot(w http.ResponseWriter, r *http.Request, uid int64) {
@@ -95,6 +96,15 @@ func (h *Handler) CreateLot(w http.ResponseWriter, r *http.Request, uid int64) {
 	req.Description = strings.TrimSpace(req.Description)
 
 	bad := func(msg string) { writeError(w, http.StatusBadRequest, "validation", msg) }
+	settings, err := h.settings(r.Context())
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	hours := float64(settings.DefaultDurationMinutes) / 60
+	if req.Hours != nil {
+		hours = *req.Hours
+	}
 	switch {
 	case req.Title == "" || req.Description == "" || req.Image == "" ||
 		req.Category == "" || req.Subcategory == "":
@@ -112,11 +122,11 @@ func (h *Handler) CreateLot(w http.ResponseWriter, r *http.Request, uid int64) {
 	case req.StartPrice < 1 || req.StartPrice > maxPrice:
 		bad("Стартовая цена: от 1 до 100 000 000")
 		return
-	case req.Step < 1 || req.Step > maxPrice:
-		bad("Шаг ставки: от 1 до 100 000 000")
+	case req.Step < settings.MinBidStep || req.Step > maxPrice:
+		bad(stepRangeMessage(settings.MinBidStep))
 		return
-	case req.Hours < minHours || req.Hours > maxHours:
-		bad("Длительность аукциона: от 1 минуты до 30 дней")
+	case !durationAllowed(hours, settings):
+		bad(durationRangeMessage(settings))
 		return
 	}
 	ok, err := h.q.SubcategoryExists(r.Context(), req.Category, req.Subcategory)
@@ -132,13 +142,13 @@ func (h *Handler) CreateLot(w http.ResponseWriter, r *http.Request, uid int64) {
 	lot, err := h.q.CreateLot(r.Context(), uid, db.NewLot{
 		Title: req.Title, Description: req.Description, Image: req.Image,
 		Category: req.Category, Subcategory: req.Subcategory,
-		StartPrice: req.StartPrice, Step: req.Step, Hours: req.Hours,
+		StartPrice: req.StartPrice, Step: req.Step, Hours: hours,
 	})
 	if err != nil {
 		fail(w, r, err)
 		return
 	}
-	h.hub.LotCreated(lot.ID, time.UnixMilli(lot.EndsAt)) // таймер завершения аукциона
+	// Лот ждёт модерации (pending): таймер завершения появится, когда аукцион начнётся.
 	logging.FromContext(r.Context(), logging.ComponentHandler).Info("lot created", zap.Int64("lot_id", lot.ID))
 	writeJSON(w, http.StatusCreated, lot)
 }
@@ -213,7 +223,7 @@ func (h *Handler) RandomLot(w http.ResponseWriter, r *http.Request) {
 /* ---------- мои лоты и ставки ---------- */
 
 func (h *Handler) MyLots(w http.ResponseWriter, r *http.Request, uid int64) {
-	lots, err := h.q.ListLots(r.Context(), uid, model.LotFilter{Status: "all", AuthorID: uid}, 0, 0)
+	lots, err := h.q.ListLots(r.Context(), uid, model.LotFilter{Status: "all", AuthorID: uid, All: true}, 0, 0)
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -222,7 +232,7 @@ func (h *Handler) MyLots(w http.ResponseWriter, r *http.Request, uid int64) {
 }
 
 func (h *Handler) MyBidLots(w http.ResponseWriter, r *http.Request, uid int64) {
-	lots, err := h.q.ListLots(r.Context(), uid, model.LotFilter{Status: "all", BidderID: uid}, 0, 0)
+	lots, err := h.q.ListLots(r.Context(), uid, model.LotFilter{Status: "all", BidderID: uid, All: true}, 0, 0)
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -247,7 +257,7 @@ func (h *Handler) GetLotBids(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Лот не найден")
 		return
 	}
-	bids, err := h.q.GetLotBids(r.Context(), id)
+	bids, err := h.q.GetLotBidsFor(r.Context(), h.userID(r), id)
 	if errors.Is(err, db.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "Лот не найден")
 		return
