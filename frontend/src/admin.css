@@ -1,0 +1,391 @@
+/* ================= Новые статусы лота (видны и вне админки) ================= */
+
+.pill.pending {
+  background: #fff3cd;
+  color: #8a5a00;
+}
+
+.pill.approved {
+  background: #dff0ff;
+  color: #1c5fa0;
+}
+
+.pill.rejected {
+  background: #fbe3ea;
+  color: var(--danger);
+}
+
+.moderation-reason {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 14px;
+}
+
+.admin-button {
+  margin-right: 8px;
+}
+
+/* ================= Панель администратора ================= */
+
+.admin h1 {
+  margin-bottom: 16px;
+}
+
+.admin-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 24px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-tabs a {
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 15px;
+  background: var(--white);
+  color: var(--main);
+  box-shadow: var(--shadow);
+}
+
+.admin-tabs a.active {
+  background: var(--main);
+  color: var(--white);
+}
+
+.admin-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 18px;
+}
+
+.admin-bar .field {
+  min-width: 150px;
+  width: auto;
+  flex: 0 1 auto;
+}
+
+.admin-bar .grow {
+  flex: 1 1 220px;
+}
+
+.admin-bar .check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.admin-bar .check input {
+  width: auto;
+}
+
+.admin-section {
+  margin-bottom: 36px;
+}
+
+.admin-section > h2 {
+  margin-bottom: 12px;
+}
+
+.admin-card {
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  padding: 16px 18px;
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.stat-card .stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--main);
+}
+
+.stat-card .stat-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.admin-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 16px;
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-table th {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.admin-table tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-table td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.admin-table td.nowrap {
+  white-space: nowrap;
+}
+
+.admin-table td.details {
+  max-width: 460px;
+  word-break: break-word;
+  color: rgba(21, 21, 21, 0.75);
+}
+
+.admin-table .row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.admin-table .thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+}
+
+.admin-link {
+  color: var(--main);
+  font-weight: 600;
+}
+
+.admin-link:hover {
+  text-decoration: underline;
+}
+
+.admin-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 8px 16px;
+  margin: 0 0 8px;
+}
+
+.kv dt {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.kv dd {
+  margin: 0;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0 4px;
+}
+
+.sub-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.sub-tabs button {
+  padding: 6px 14px;
+  border: 1px solid var(--soft);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--main);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sub-tabs button.active {
+  background: var(--main);
+  border-color: var(--main);
+  color: var(--white);
+}
+
+.lot-admin-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+.lot-admin-layout img.lot-admin-image {
+  width: 100%;
+  border-radius: var(--radius);
+  object-fit: cover;
+  aspect-ratio: 1;
+}
+
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.settings-grid .field small {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.ref-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+}
+
+.ref-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.ref-list li.sub {
+  padding-left: 28px;
+  border-bottom: none;
+}
+
+.ref-list .ref-name {
+  flex: 1 1 200px;
+  font-weight: 600;
+}
+
+.ref-list .ref-id {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ref-add {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.ref-add input {
+  flex: 1 1 200px;
+  width: auto;
+}
+
+.top-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(21, 21, 21, 0.5);
+}
+
+.modal {
+  width: 100%;
+  max-width: 480px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-hover);
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.radio-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.radio-row input {
+  width: auto;
+}
+
+@media (max-width: 760px) {
+  .lot-admin-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .kv {
+    grid-template-columns: 1fr;
+  }
+}

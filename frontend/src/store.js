@@ -1,6 +1,7 @@
 import { reactive } from 'vue'
 import { api, ApiError, onSessionExpired, SESSION_GONE_CODES } from './api'
 import { reconnectRealtime } from './realtime'
+import { statusText } from './status'
 
 export const state = reactive({
   user: null, // профиль из /auth/me; null — не вошли. Токены и id в браузерных хранилищах не держим
@@ -71,8 +72,13 @@ async function bootstrap() {
     state.user = me.value
   } else {
     state.user = null
-    // 401 — просто не вошли, это не ошибка
-    if (me.reason?.status !== 401) errors.push(me.reason)
+    if (me.reason?.code === 'account_blocked') {
+      // сервер уже стёр cookie: показываем причину на странице входа, а не как сбой загрузки
+      state.authNotice = me.reason.message
+    } else if (me.reason?.status !== 401) {
+      // 401 — просто не вошли, это не ошибка
+      errors.push(me.reason)
+    }
   }
   if (time.status === 'rejected') errors.push(time.reason)
   state.initError = errors.length ? errors[0].message || 'Ошибка сервера' : ''
@@ -104,8 +110,11 @@ onSessionExpired((error) => sessionEnded(error.message))
 // Возвращает текст ошибки для пользователя. Если сессии больше нет — выводит из аккаунта.
 // Сетевые ошибки и 5xx из аккаунта не выкидывают.
 export function handleApiError(error) {
-  if (error instanceof ApiError && error.status === 401 && SESSION_GONE_CODES.has(error.code)) {
-    sessionEnded(error.message)
+  if (error instanceof ApiError) {
+    const gone = error.status === 401 && SESSION_GONE_CODES.has(error.code)
+    // администратор заблокировал аккаунт: сервер стёр cookie, сессии больше нет
+    const blocked = error.status === 403 && error.code === 'account_blocked'
+    if (gone || blocked) sessionEnded(error.message)
   }
   return error?.message || 'Ошибка сервера'
 }
@@ -129,6 +138,17 @@ export const statusOptions = [
 ]
 
 /* ---------- Справочники ---------- */
+
+// Администратор изменил категории или общежития — подтягиваем актуальные справочники
+export async function reloadReferences() {
+  const [categories, dorms] = await Promise.all([api.categories(), api.dorms()])
+  state.categories = categories
+  state.dorms = dorms
+}
+
+export function isAdmin() {
+  return state.user?.role === 'admin'
+}
 
 export function getCategory(id) {
   return state.categories.find((c) => c.id === id)
@@ -160,10 +180,7 @@ export function getStatus(lot) {
 }
 
 export function getStatusText(lot) {
-  const status = getStatus(lot)
-  if (status === 'active') return 'Активен'
-  if (status === 'cancelled') return 'Отменён'
-  return lot.bidsCount > 0 ? 'Завершён — продан' : 'Завершён — не продан'
+  return statusText(getStatus(lot), lot.bidsCount)
 }
 
 // Цену и число ставок не считаем — берём из полей лота

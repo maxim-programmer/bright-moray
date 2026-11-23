@@ -181,3 +181,54 @@ export const api = {
   },
   createLot: (data) => request('POST', '/api/lots', data)
 }
+
+// Админ-панель (/api/admin/*, только роль admin). Списки постраничные: { <ключ>, total, page, pageSize, totalPages }.
+// Периоды from/to — миллисекунды Unix (to не включается).
+const A = '/api/admin'
+
+export const adminApi = {
+  // пользователи
+  users: (params) => request('GET', `${A}/users${qs(params)}`), // q, role, blocked, page
+  user: (id) => request('GET', `${A}/users/${id}`), // { user, stats }
+  userActivity: (id, params) => request('GET', `${A}/users/${id}/activity${qs(params)}`),
+  userLots: (id, params) => request('GET', `${A}/users/${id}/lots${qs(params)}`),
+  userBids: (id, params) => request('GET', `${A}/users/${id}/bids${qs(params)}`),
+  blockUser: (id, reason) => request('POST', `${A}/users/${id}/block`, { reason }),
+  unblockUser: (id) => request('POST', `${A}/users/${id}/unblock`),
+
+  // модерация лотов
+  lots: (params) => request('GET', `${A}/lots${qs(params)}`), // status, q, page
+  lot: (id) => request('GET', `${A}/lots/${id}`), // { lot, author }
+  lotHistory: (id, params) => request('GET', `${A}/lots/${id}/history${qs(params)}`),
+  approveLot: (id, startsAt) => request('POST', `${A}/lots/${id}/approve`, startsAt ? { startsAt } : {}),
+  rejectLot: (id, reason) => request('POST', `${A}/lots/${id}/reject`, { reason }),
+  editLot: (id, data) => request('PUT', `${A}/lots/${id}`, data), // { lot, changed }
+  unpublishLot: (id, reason) => request('POST', `${A}/lots/${id}/unpublish`, { reason }),
+  deleteLot: (id, reason) => request('DELETE', `${A}/lots/${id}`, { reason }),
+
+  // аукционы
+  auctions: (params) => request('GET', `${A}/auctions${qs(params)}`), // status, q, page → { auctions, … }
+  auction: (id) => request('GET', `${A}/auctions/${id}`), // { lot, bids, author, winner, finalPrice, closed }
+  finishAuction: (id, reason) => request('POST', `${A}/auctions/${id}/finish`, { reason }),
+  cancelAuction: (id, reason) => request('POST', `${A}/auctions/${id}/cancel`, { reason }),
+  resolveDispute: (id, data) => request('POST', `${A}/auctions/${id}/resolve`, data), // { action, reason, bidId? }
+
+  // журнал и статистика
+  events: (params) => request('GET', `${A}/events${qs(params)}`), // userId, lotId, type, byAdmin, from, to, page
+  eventTypes: () => request('GET', `${A}/events/types`),
+  stats: (params) => request('GET', `${A}/stats${qs(params)}`),
+  userStats: (id, params) => request('GET', `${A}/stats/users/${id}${qs(params)}`),
+
+  // настройки и справочники
+  settings: () => request('GET', `${A}/settings`), // { settings, defaults }
+  saveSettings: (data) => request('PUT', `${A}/settings`, data),
+  createCategory: (data) => request('POST', `${A}/categories`, data),
+  updateCategory: (id, data) => request('PUT', `${A}/categories/${id}`, data),
+  deleteCategory: (id) => request('DELETE', `${A}/categories/${id}`),
+  createSub: (categoryId, data) => request('POST', `${A}/categories/${categoryId}/subcategories`, data),
+  updateSub: (categoryId, id, data) => request('PUT', `${A}/categories/${categoryId}/subcategories/${id}`, data),
+  deleteSub: (categoryId, id) => request('DELETE', `${A}/categories/${categoryId}/subcategories/${id}`),
+  createDorm: (data) => request('POST', `${A}/dorms`, data),
+  updateDorm: (id, data) => request('PUT', `${A}/dorms/${id}`, data),
+  deleteDorm: (id) => request('DELETE', `${A}/dorms/${id}`)
+}

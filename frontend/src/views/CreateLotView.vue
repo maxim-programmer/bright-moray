@@ -104,6 +104,7 @@ async function submit() {
         </select>
       </label>
     </div>
+    <p v-if="!state.categories.length" class="muted small">Категории пока не добавлены — их заполняет администратор.</p>
     <div class="field">
       Фотография
       <label class="file-box">
@@ -127,7 +128,8 @@ async function submit() {
       Длительность аукциона, часов
       <input v-model="hours" type="number" min="1" />
     </label>
+    <p class="muted small">Лот сначала проверит администратор: аукцион начнётся после одобрения.</p>
     <div v-if="error" class="error">{{ error }}</div>
-    <button class="button" type="submit" :disabled="busy">{{ busy ? 'Загрузка…' : 'Опубликовать' }}</button>
+    <button class="button" type="submit" :disabled="busy">{{ busy ? 'Загрузка…' : 'Отправить на модерацию' }}</button>
   </form>
 </template>

@@ -57,6 +57,7 @@ async function submit() {
           {{ dorm.name }}
         </option>
       </select>
+      <span v-if="!state.dorms.length" class="muted small">Список общежитий пока пуст — его заполняет администратор.</span>
     </label>
     <label class="field">
       Пароль

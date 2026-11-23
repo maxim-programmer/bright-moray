@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import LotCard from '../components/LotCard.vue'
 import { api } from '../api'
 import { realtime, subscribeLot } from '../realtime'
+import { isLive } from '../status'
 import {
   state,
   getStatusText,
@@ -30,6 +31,7 @@ const BID_ERRORS = {
   already_leading: 'Ваша ставка и так лидирует.',
   lot_closed: 'Аукцион уже завершён, ставки не принимаются.',
   own_lot: 'Нельзя ставить на собственный лот.',
+  account_blocked: 'Ваш аккаунт заблокирован администратором.',
   validation: 'Введите сумму ставки целым числом.',
   rate_limited: 'Слишком много запросов, попробуйте через пару секунд.',
   network: 'Нет связи с сервером, ставка не отправлена.'
@@ -169,7 +171,8 @@ async function load() {
     loading.value = false
   }
   // подписываемся после первой загрузки: snapshot придёт поверх REST-данных и закроет промежуток
-  if (alive) unsubscribe = subscribeLot(lot.value.id, onLiveMessage)
+  // лот на модерации в реалтайме «не существует» (сервер ответил бы not_found) — не подписываемся
+  if (alive && isLive(lot.value.status)) unsubscribe = subscribeLot(lot.value.id, onLiveMessage)
   // похожие лоты не критичны: если не загрузились — просто не показываем блок
   api.similarLots(route.params.id).then(
     (list) => (similar.value = list),
@@ -407,10 +410,31 @@ async function openRandom() {
           </div>
         </div>
 
+        <!-- На модерации -->
+        <div v-else-if="status === 'pending'" class="panel">
+          <span class="pill pending">{{ getStatusText(lot) }}</span>
+          <p>Заявка отправлена администратору. Лот появится в каталоге и аукцион начнётся после одобрения.</p>
+        </div>
+
+        <!-- Одобрен, ждёт начала -->
+        <div v-else-if="status === 'approved'" class="panel">
+          <span class="pill approved">{{ getStatusText(lot) }}</span>
+          <p v-if="lot.startsAt">Аукцион начнётся {{ formatDate(lot.startsAt) }}.</p>
+          <p v-else>Аукцион скоро начнётся.</p>
+        </div>
+
+        <!-- Отклонён -->
+        <div v-else-if="status === 'rejected'" class="panel">
+          <span class="pill rejected">{{ getStatusText(lot) }}</span>
+          <p>Администратор отклонил заявку.</p>
+          <p v-if="lot.moderationReason" class="moderation-reason">Причина: {{ lot.moderationReason }}</p>
+        </div>
+
         <!-- Отменён -->
         <div v-else-if="status === 'cancelled'" class="panel">
           <span class="pill cancelled">{{ getStatusText(lot) }}</span>
-          <p>Продавец отменил аукцион. Ставки больше не принимаются.</p>
+          <p>Аукцион отменён. Ставки больше не принимаются.</p>
+          <p v-if="lot.moderationReason" class="moderation-reason">Причина: {{ lot.moderationReason }}</p>
         </div>
 
         <!-- Завершён -->
@@ -437,6 +461,7 @@ async function openRandom() {
             {{ lot.contact.role }}: <b>{{ lot.contact.name }}</b> — Telegram
             <b>@{{ lot.contact.telegram }}</b>
           </div>
+          <p v-if="lot.moderationReason" class="moderation-reason">Комментарий администратора: {{ lot.moderationReason }}</p>
           <div v-if="error" class="error">{{ error }}</div>
         </div>
 
