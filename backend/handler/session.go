@@ -131,6 +131,21 @@ func (h *Handler) authed(fn func(w http.ResponseWriter, r *http.Request, uid int
 			writeError(w, http.StatusUnauthorized, "unauthorized", "Войдите в аккаунт")
 			return
 		}
+		// Access-токен живёт до 15 минут и о блокировке не знает: заблокированного пользователя
+		// отсекаем по БД. Удалённого пользователя здесь не трогаем — это дело самих обработчиков.
+		if h.q != nil {
+			_, blocked, err := h.q.UserAccess(r.Context(), uid)
+			switch {
+			case errors.Is(err, db.ErrNotFound):
+			case err != nil:
+				fail(w, r, err)
+				return
+			case blocked:
+				h.clearAuthCookies(w)
+				writeError(w, http.StatusForbidden, "account_blocked", msgBlocked)
+				return
+			}
+		}
 		fn(w, r, uid)
 	}
 }

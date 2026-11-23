@@ -70,6 +70,8 @@ func New(q *db.Queries, cfg config.Config, opts ...Option) *Handler {
 	h.log = h.logger()
 	h.hub = live.New(q, live.Options{
 		AntiSnipe:      db.AntiSnipe{Window: cfg.AntiSnipeWindow, Extend: cfg.AntiSnipeExtend},
+		AntiSnipeFunc:  h.antiSnipeNow, // правила продления меняются в админ-панели без перезапуска
+		OnFinish:       h.onAuctionFinished,
 		AllowedOrigins: cfg.WSAllowedOrigins,
 		Logger:         h.log,
 	})
@@ -238,6 +240,8 @@ func SetupRoutes(mux *http.ServeMux, h *Handler) {
 
 	mux.HandleFunc("GET /api/categories", h.GetCategories)
 	mux.HandleFunc("GET /api/dorms", h.GetDorms)
+
+	setupAdminRoutes(mux, h)
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Такого метода нет")

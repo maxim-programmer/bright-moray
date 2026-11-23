@@ -3,6 +3,7 @@ package handler
 import (
 	"auction/db"
 	"auction/logging"
+	"auction/model"
 	"errors"
 	"net/http"
 	"regexp"
@@ -116,6 +117,10 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	h.logEvent(r, db.EventInput{
+		Type: model.EvUserRegistered, UserID: user.ID, ActorID: user.ID,
+		Details: map[string]any{"username": user.Username, "name": user.Name},
+	})
 	if err := h.startSession(w, r, user.ID); err != nil {
 		fail(w, r, err)
 		return
@@ -154,11 +159,20 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if user.Blocked { // пароль верный, но войти заблокированному нельзя
+		writeError(w, http.StatusForbidden, "account_blocked", msgBlocked)
+		return
+	}
+
 	h.loginRate.reset(ip)
 	if err := h.startSession(w, r, user.ID); err != nil {
 		fail(w, r, err)
 		return
 	}
+	h.logEvent(r, db.EventInput{
+		Type: model.EvUserLogin, UserID: user.ID, ActorID: user.ID,
+		Details: map[string]any{"ip": ip},
+	})
 	writeJSON(w, http.StatusOK, user)
 }
 
