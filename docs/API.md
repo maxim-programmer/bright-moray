@@ -7,7 +7,7 @@
 Идентификатор пользователя **никогда** не передаётся в запросах — сервер берёт его из сессии.
 
 Ошибки: `{ "error": "текст для пользователя", "code": "machine_code" }` + HTTP-статус
-(400 валидация, 401 не вошли, 403 нет прав или чужой Origin (`bad_origin`), 404, 409 конфликт состояния, 429 лимит входа, 413/415 загрузка).
+(400 валидация, 401 не вошли, 403 нет прав (`forbidden`), аккаунт заблокирован (`account_blocked`) или чужой Origin (`bad_origin`), 404, 409 конфликт состояния, 429 лимит входа, 413/415 загрузка).
 
 ## Таймеры
 Не считайте оставшееся время по `Date.now()` клиента: запросите `GET /api/time` → `{ "now": ms }`,
@@ -41,7 +41,13 @@
 Правила: никнейм 3–32 (буквы/цифры/`_.-`, без учёта регистра уникален); Telegram 5–32 (`@` можно),
 уникален; пароль 6–72 байта; `dormId` — из `/dorms`.
 
-`User = { id, username, name, telegram, dormId, createdAt }` — отдаётся только владельцу.
+`User = { id, username, name, telegram, dormId, createdAt, role }` — отдаётся только владельцу.
+`role`: `user` или `admin` (администраторов назначает только команда `make admin-create`, см. «Админ-панель»).
+Администратор, созданный командой, может не иметь Telegram и общежития (`telegram: ""`, `dormId: 0`).
+
+**Блокировка.** Заблокированный пользователь не может войти (`403 account_blocked`, пароль при этом проверяется
+первым — неверный пароль по-прежнему даёт 401), а уже выданные ему токены перестают работать сразу:
+любой запрос с сессией возвращает `403 account_blocked` и стирает cookie, ставки по WebSocket отклоняются.
 Чужие профили не публичны: имя автора лота — `authorUsername`, имена в ставках — `username`.
 
 ## Профиль (нужна сессия)
@@ -56,9 +62,18 @@
 
 ## Лоты
 `Lot = { id, title, description, image, category, subcategory, authorId, authorUsername, dormId, startPrice,
-step, currentPrice, minBid, bidsCount, leaderId|null, myMaxBid, createdAt, endsAt, status, contact? }`
+step, currentPrice, minBid, bidsCount, leaderId|null, myMaxBid, createdAt, endsAt, status, contact?,
+durationSec, startsAt|null, hidden?, moderationReason? }`
 
-* `status`: `active | finished | cancelled` (уже с учётом `endsAt`).
+* `status`: `pending | approved | rejected | active | finished | cancelled` (`active` уже с учётом `endsAt`).
+  Жизненный цикл: новый лот → `pending` (ждёт администратора) → `approved` (одобрен, ждёт назначенного
+  начала) или сразу `active` → `finished`; `rejected` — отклонён; `cancelled` — отменён автором или администратором.
+  Публично (каталог, `GET /lots/{id}`, ставки) видны только `active`, `finished` и `cancelled`, не снятые с публикации.
+  Лот в статусах `pending`, `approved`, `rejected` или снятый с публикации (`hidden`) видят только автор, администратор и
+  пользователи, уже делавшие на него ставки; для остальных — `404`. «Мои лоты» (`/me/lots`) показывают все статусы.
+* `durationSec` — заявленная длительность аукциона; `startsAt` — когда аукцион начался (или начнётся, если лот `approved`).
+  Пока лот не `active`, `endsAt` лишь расчётный. Таймер на странице показывайте только для `active`.
+* `moderationReason` — причина отказа, снятия или отмены; видна автору лота (и администратору).
 * `currentPrice` — лидирующая ставка или `startPrice`; `minBid` — `startPrice`, пока ставок нет (первая ставка может равняться стартовой цене), далее `currentPrice + step`.
 * `dormId` — общежитие продавца. `myMaxBid` = 0 для анонима или если ставок нет.
 * `contact = { role, name, telegram }` — **только** продавцу и победителю завершённого лота со ставками
@@ -66,9 +81,9 @@ step, currentPrice, minBid, bidsCount, leaderId|null, myMaxBid, createdAt, endsA
 
 | Метод | Путь | Описание |
 |---|---|---|
-| GET | `/lots` | Каталог. Query: `category`, `sub`, `q`, `status` (`active` по умолчанию, `finished`, `all`), `sort`, `priceMin`, `priceMax`, `dormId`, `page`. → `{ lots, page, totalPages, total }`, 20 на страницу |
+| GET | `/lots` | Каталог (только опубликованные лоты). Query: `category`, `sub`, `q`, `status` (`active` по умолчанию, `finished`, `all`), `sort`, `priceMin`, `priceMax`, `dormId`, `page`. → `{ lots, page, totalPages, total }`, 20 на страницу |
 | GET | `/lots/{id}` | Один лот |
-| POST | `/lots` | Создать (сессия) → 201 `Lot` |
+| POST | `/lots` | Подать заявку на лот (сессия) → 201 `Lot` со статусом `pending`; аукцион начнётся после одобрения администратором |
 | DELETE | `/lots/{id}` | Отменить: только автор, только активный и **без ставок** → `Lot` |
 | GET | `/lots/{id}/similar` | До 4 активных лотов той же категории |
 | GET | `/lots/random` | `{ id }` случайного активного (`category`, `sub` опционально), `{ id: null }` если нет |
@@ -80,8 +95,11 @@ step, currentPrice, minBid, bidsCount, leaderId|null, myMaxBid, createdAt, endsA
 1. `POST /api/uploads` (multipart, поле `file`, JPEG/PNG/GIF/WebP до 5 МБ, тип определяется по содержимому) → `201 { url: "/uploads/<имя>" }`.
 2. `POST /api/lots` `{ title, description, image: <url из шага 1>, category, subcategory, startPrice, step, hours }`.
 
-Лимиты: название ≤300, описание ≤5000, цена и шаг 1…100 000 000, `hours` от 1 минуты (0.0167) до 720 (30 дней),
-подкатегория должна принадлежать категории. Локальные `blob:`-ссылки не принимаются.
+Лимиты: название ≤300, описание ≤5000, стартовая цена 1…100 000 000, подкатегория должна принадлежать категории.
+Локальные `blob:`-ссылки не принимаются. Границы **шага** и **длительности** задаёт администратор
+(`GET /admin/settings`; по умолчанию шаг ≥ 1 ₽, `hours` от 1 минуты (0.0167) до 720 (30 дней)).
+`hours` можно не передавать — тогда берётся время автозавершения по умолчанию (1 сутки, если не менялось).
+Явный `hours: 0` — ошибка валидации.
 
 ## Ставки
 | Метод | Путь | Описание |
@@ -89,14 +107,16 @@ step, currentPrice, minBid, bidsCount, leaderId|null, myMaxBid, createdAt, endsA
 | GET | `/lots/{id}/bids` | `[{ id, lotId, userId, username, amount, createdAt }]`, новые первыми |
 | POST | `/lots/{id}/bids` | `{ amount }` → 201 `{ bid, lot, extended }` (лот уже обновлён; `extended: true` — сработал Anti-snipe) |
 
-Правила проверяет сервер (транзакция с блокировкой лота): не свой лот (403 `own_lot`), аукцион не закрыт
-(409 `lot_closed`), не лидер (409 `already_leading`), `amount ≥ minBid` (400 `bid_too_low`).
+Правила проверяет сервер (транзакция с блокировкой лота): аккаунт не заблокирован (403 `account_blocked`),
+не свой лот (403 `own_lot`), лот опубликован (иначе 404), аукцион не закрыт (409 `lot_closed`), не лидер (409 `already_leading`), `amount ≥ minBid` (400 `bid_too_low`).
 Клиентские проверки оставьте только для удобства — доверять им нельзя.
 
 ### Anti-snipe
-Ставка, принятая меньше чем за `ANTI_SNIPE_WINDOW_SEC` (по умолчанию 120 с) до конца аукциона, переносит конец на
-«момент ставки + `ANTI_SNIPE_EXTEND_SEC`» (по умолчанию 120 с). Срок только растёт и никогда не сокращается;
-продлений может быть сколько угодно. `ANTI_SNIPE_WINDOW_SEC=0` выключает защиту. Время сверяется по часам БД
+Ставка, принятая меньше чем за «окно» (по умолчанию 120 с) до конца аукциона, переносит конец на
+«момент ставки + продление» (по умолчанию 120 с). Срок только растёт и никогда не сокращается;
+продлений может быть сколько угодно. Окно 0 выключает защиту. Значения по умолчанию берутся из
+`ANTI_SNIPE_WINDOW_SEC` / `ANTI_SNIPE_EXTEND_SEC`; администратор меняет их в настройках (`PUT /admin/settings`) без
+перезапуска — новые правила действуют со следующей ставки, а клиенты узнают их из `hello` при подключении. Время сверяется по часам БД
 внутри транзакции ставки, поэтому ставка не может «проскочить» после конца аукциона.
 Настройки сервер сообщает в WebSocket-сообщении `hello` (`antiSnipe`).
 
@@ -138,8 +158,127 @@ step, currentPrice, minBid, bidsCount, leaderId|null, myMaxBid, createdAt, endsA
 перезапросите `GET /api/lots/{id}` (там появятся контакты победителя и продавца).
 
 Гарантии: события одного лота приходят в порядке фиксации в БД, `snapshot` не может обогнать или потерять
-событие. Статусы `finished` и `cancelled` терминальны. При обрыве соединения переподключитесь и снова
+событие. Статусы `finished` и `cancelled` терминальны (единственное исключение — администратор может аннулировать итог
+завершённого аукциона при разборе спора: тогда подписчики получат `lot_cancelled`). Администратор может также
+принудительно завершить (`lot_finished`) или отменить (`lot_cancelled`) идущий аукцион. Подписаться на лот,
+не прошедший модерацию, нельзя (`not_found`). При обрыве соединения переподключитесь и снова
 отправьте `subscribe` — снимок восстановит актуальное состояние (пропущенные события заново не присылаются).
+
+## Админ-панель (`/api/admin/*`, только роль `admin`)
+
+Без сессии — `401`, с ролью `user` — `403 forbidden`. Роль проверяется по БД при каждом запросе, поэтому снятие
+роли и блокировка действуют сразу. Изменяющие запросы пишутся в журнал событий. Списки постраничные:
+`?page=1&pageSize=20` (до 100) → `{ <ключ>, total, page, pageSize, totalPages }`. Периоды: `from`, `to` —
+миллисекунды Unix или дата `ГГГГ-ММ-ДД` (UTC; `to` с датой включает весь день). Везде, где нужна причина
+(`reason`), она обязательна, кроме блокировки и принудительного завершения, и не длиннее 1000 символов.
+
+### Администраторы: создание и откат
+Не через API, а командой в терминале (в Docker — внутри контейнера `backend`):
+
+| Команда | Что делает |
+|---|---|
+| `make admin-create` | Спрашивает `username` и пароль (повтор пароля — в интерактивном режиме). Нет такого пользователя — дополнительно спрашивает имя, почту и Telegram (необязательно, Enter — пропустить) и создаёт пользователя с ролью `admin`; есть — меняет роль на `admin`, остальные данные не трогает. Хеш пароля (bcrypt) сохраняется в PostgreSQL в обоих случаях; у существующего пользователя сессии отзываются, блокировка снимается |
+| `make admin-delete` | Откат (спрашивает `username` и подтверждение). Аккаунт, который создала `admin-create` и у которого нет лотов и ставок, удаляется; иначе снимается только роль `admin` |
+
+Вход — на общей странице входа по `username`. Правила `username` и Telegram те же, что при регистрации.
+Почта необязательна и нигде, кроме админ-панели (карточка пользователя и поиск), не используется. Для запуска без Docker:
+`make admin-create-local`.
+
+### Пользователи
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/admin/users` | Список и поиск. Query: `q` (ID, имя, username, почта или Telegram), `role`, `blocked` (`true`/`false`) → `{ users: [AdminUser], … }` |
+| GET | `/admin/users/{id}` | `{ user: AdminUser, stats: UserStats }` — подробная информация |
+| GET | `/admin/users/{id}/activity` | История активности (события, где пользователь — субъект или исполнитель). Query: `type`, `from`, `to` → `{ events, … }` |
+| GET | `/admin/users/{id}/lots` | Все лоты пользователя любых статусов (`status` — фильтр) → `{ lots, … }` |
+| GET | `/admin/users/{id}/bids` | История ставок → `{ bids: [{ id, lotId, lotTitle, lotStatus, amount, createdAt, leading }], … }` |
+| POST | `/admin/users/{id}/block` | `{ reason? }` → `AdminUser`; отзывает все сессии. Администратора и себя заблокировать нельзя (409) |
+| POST | `/admin/users/{id}/unblock` | → `AdminUser` |
+
+`AdminUser = { id, username, name, email, telegram, dormId, createdAt, role, blocked, blockedAt, blockedReason?, blockedBy?,
+lotsCount, bidsCount, lastActivity }`.
+
+### Модерация лотов
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/admin/lots` | Все лоты. Query: `status` (`pending`, `approved`, `rejected`, `active`, `finished`, `cancelled`, `all`), `q`, `category`, `sub`, `authorId`, `sort` (для `pending` по умолчанию `old` — давно ждущие первыми) → `{ lots, … }` |
+| GET | `/admin/lots/{id}` | `{ lot, author }`; `lot` с `moderationReason`, `moderatedBy`, `moderatedAt` |
+| POST | `/admin/lots/{id}/approve` | `{ startsAt? }` — только `pending`. Без `startsAt` (или в прошлом) аукцион начинается сразу (`active`), иначе лот становится `approved` и стартует сам в назначенное время (до года вперёд). Срок отсчитывается от фактического старта |
+| POST | `/admin/lots/{id}/reject` | `{ reason }` — только `pending` → `rejected` |
+| PUT | `/admin/lots/{id}` | Редактирование: любые из `title`, `description`, `image`, `category`+`subcategory` (только вместе), `startPrice`, `step`, `hours` → `{ lot, changed }`. Цена, шаг и длительность — только пока аукцион не начался (иначе 409 `locked`). Правила те же, что при создании, включая настройки |
+| POST | `/admin/lots/{id}/unpublish` | `{ reason }` — принудительное снятие с публикации: лот скрывается из публичного доступа (`hidden`); идущий или ожидающий старта аукцион отменяется (`cancelled`) |
+| DELETE | `/admin/lots/{id}` | `{ reason }` — безвозвратное удаление вместе со ставками; история остаётся в журнале |
+| GET | `/admin/lots/{id}/history` | История изменений лота (события без ставок; работает и для удалённого лота) → `{ events, … }` |
+
+### Аукционы
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/admin/auctions` | `status`: `active` (по умолчанию), `finished`, `cancelled`, `all`; `q`, `category`, `sub`, `sort` → `{ auctions: [Lot], … }`. Лоты на модерации сюда не входят |
+| GET | `/admin/auctions/{id}` | `AuctionDetail = { lot, bids, author, winner, finalPrice, closed }`; `author` и `winner` — `{ id, username, name, telegram }`; `winner`/`finalPrice` = `null`, пока ставок нет |
+| GET | `/admin/auctions/{id}/bids` | История ставок → `{ bids, total }` |
+| POST | `/admin/auctions/{id}/finish` | `{ reason? }` — принудительное завершение идущего аукциона; победитель — текущий лидер → `AuctionDetail` |
+| POST | `/admin/auctions/{id}/cancel` | `{ reason }` — отмена идущего аукциона; ставки остаются в истории → `AuctionDetail` |
+| POST | `/admin/auctions/{id}/resolve` | Разрешение спора по **завершённому** аукциону: `{ action, reason, bidId? }`. `dismiss` — результат остаётся; `remove_bid` — удалить спорную ставку (`bidId`), победитель и цена пересчитываются; `annul` — аннулировать результат (аукцион становится `cancelled`) → `AuctionDetail` |
+
+### Журнал событий
+`Event = { id, createdAt, type, label, userId, username?, actorId, actorUsername?, byAdmin, lotId, details }`.
+`userId` — о ком событие, `actorId` — кто совершил (для действий администратора — он сам).
+
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/admin/events` | Журнал, новые первыми. Фильтры: `userId` (субъект или исполнитель), `lotId`, `type` (точный тип или группа с точкой: `lot.`), `byAdmin=true` (действия администраторов), `from`, `to` → `{ events, … }` |
+| GET | `/admin/events/types` | `{ types: [{ type, label }], groups: [{ type, label }] }` для фильтра |
+
+Типы: `user.registered`, `user.login`, `user.blocked`, `user.unblocked`, `lot.created`, `lot.updated`, `lot.approved`,
+`lot.rejected`, `lot.unpublished`, `lot.deleted`, `lot.cancelled`, `bid.placed`, `bid.removed`, `auction.started`,
+`auction.finished`, `auction.force_finished`, `auction.cancelled`, `auction.annulled`, `auction.dispute_resolved`,
+`settings.updated`, `category.*`, `subcategory.*`, `dorm.*`, `admin.cli_*`. Завершение аукциона по сроку
+записывается сервером (`auction.finished`, с победителем и ценой), в том числе если аукцион закончился, пока сервер был остановлен.
+
+### Статистика
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/admin/stats` | Общая статистика за период (`from`, `to`; без них — за всё время) |
+| GET | `/admin/stats/users/{id}` | Статистика пользователя за период |
+
+`OverallStats = { usersTotal, usersRegistered, usersActive, usersBlocked, lotsCreated, lotsPending, auctionsActive,
+auctionsFinished, auctionsCancelled, bidsTotal, avgBidsPerAuction, topCategories: [{ id, name, lots, bids }],
+topUsers: [{ id, username, name, lots, bids, score }], activeWindowDefault, from, to }`.
+`usersActive` — пользователи с собственными действиями в системе за период (если период не задан — за последние 30 суток,
+`activeWindowDefault: true`). `avgBidsPerAuction` — ставок на один аукцион, начавшийся в период. Категории — по числу
+ставок, затем лотов; активные пользователи — по сумме лотов и ставок. `lotsPending` и `usersBlocked` — текущие значения.
+`UserStats = { userId, lotsCreated, bidsPlaced, participated, won, sold, spentTotal, earnedTotal, events, registeredAt, lastActivity, from, to }`.
+
+### Системные настройки
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/admin/settings` | `{ settings, defaults }` |
+| PUT | `/admin/settings` | Любые из полей `settings`; остальные не меняются → `{ settings, defaults }` |
+
+`settings = { minBidStep, minDurationMinutes, maxDurationMinutes, defaultDurationMinutes, antiSnipeWindowSec, antiSnipeExtendSec }`:
+минимальный шаг ставки (₽); минимальная и максимальная длительность аукциона; время автоматического завершения по
+умолчанию (длительность, если автор не указал `hours`); правила продления при ставке в последние минуты (окно и
+продление, 0 в окне — выключено). Должно выполняться `min ≤ default ≤ max`. Настройки действуют на новые лоты и
+следующие ставки; уже созданные лоты не пересчитываются. Пока администратор ничего не менял, действуют значения
+по умолчанию (продление — из `ANTI_SNIPE_*`).
+
+### Справочники: категории, подкатегории, общежития
+Заполняет администратор: в коде и в миграциях ничего не зашито, после установки справочники пусты (пока нет общежитий, регистрация невозможна; пока нет категорий — нельзя создать лот). Новые `id` строятся из названия (`Книги и учебники` →
+`knigi-i-uchebniki`, при совпадении добавляется `-2`, `-3`…); можно передать свой `id` (латиница, цифры, дефис) — занятый даёт 409.
+
+| Метод | Путь | Тело |
+|---|---|---|
+| POST | `/admin/categories` | `{ name, description?, id? }` → 201 `{ id, name, description, subs: [] }` |
+| PUT | `/admin/categories/{id}` | `{ name, description? }` |
+| DELETE | `/admin/categories/{id}` | Вместе с подкатегориями. `409 in_use`, если в категории есть лоты |
+| POST | `/admin/categories/{id}/subcategories` | `{ name, id? }` → 201 `{ id, name }` (`id` подкатегории уникален во всём справочнике) |
+| PUT | `/admin/categories/{id}/subcategories/{sub}` | `{ name }` |
+| DELETE | `/admin/categories/{id}/subcategories/{sub}` | `409 in_use`, если есть лоты |
+| POST | `/admin/dorms` | `{ name }` → 201 `{ id, name }` (номер выдаётся автоматически; название уникально без учёта регистра) |
+| PUT | `/admin/dorms/{id}` | `{ name }` |
+| DELETE | `/admin/dorms/{id}` | `409 in_use`, если в общежитии есть пользователи |
+
+Публичные `GET /categories` и `GET /dorms` отдают актуальное содержимое.
 
 ## Что менять во фронтенде
 `store.js` сейчас синхронный и содержит бизнес-логику. При интеграции: цены, лидера, число ставок, статус,
