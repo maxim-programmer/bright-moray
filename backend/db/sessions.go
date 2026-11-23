@@ -19,13 +19,14 @@ var (
 	ErrRefreshRace = errors.New("refresh token rotated concurrently")
 )
 
-// Причины отзыва (совпадают с CHECK в миграции 004).
+// Причины отзыва (совпадают с CHECK в миграциях 004 и 005).
 const (
 	RevokeLogout         = "logout"
 	RevokeLogoutAll      = "logout_all"
 	RevokePasswordChange = "password_change"
 	RevokeReuse          = "reuse_detected"
 	RevokeRelogin        = "relogin"
+	RevokeBlocked        = "blocked" // пользователя заблокировал администратор
 )
 
 // SessionToken — только что выпущенный refresh-токен (его хеш уже в БД).

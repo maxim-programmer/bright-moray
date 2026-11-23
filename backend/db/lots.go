@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -33,20 +34,36 @@ LEFT JOIN LATERAL (SELECT COUNT(*) AS n FROM bids WHERE lot_id = l.id) cnt ON tr
 LEFT JOIN LATERAL (SELECT MAX(amount) AS amount FROM bids WHERE lot_id = l.id AND user_id = $1) mine ON true`
 
 const lotSelect = `SELECT l.id, l.title, l.description, l.image, l.category_id, l.subcategory_id,
-	l.author_id, au.username, au.dorm_id, l.start_price, l.step,
+	l.author_id, au.username, COALESCE(au.dorm_id, 0), l.start_price, l.step,
 	` + curPrice + `, cnt.n, top.user_id, COALESCE(mine.amount, 0),
-	l.created_at, l.ends_at, ` + effStatus + ` ` + lotFromFull
+	l.created_at, l.ends_at, ` + effStatus + `,
+	COALESCE(l.duration_seconds, GREATEST(1, EXTRACT(EPOCH FROM (l.ends_at - l.created_at))::bigint)),
+	l.starts_at, l.hidden, COALESCE(l.moderation_reason, ''), l.moderated_by, l.moderated_at ` + lotFromFull
 
 func scanLot(row interface{ Scan(...any) error }) (model.Lot, error) {
 	var l model.Lot
-	var leader sql.NullInt64
+	var leader, moderatedBy sql.NullInt64
 	var created, ends time.Time
+	var startsAt, moderatedAt sql.NullTime
 	err := row.Scan(&l.ID, &l.Title, &l.Description, &l.Image, &l.Category, &l.Subcategory,
 		&l.AuthorID, &l.AuthorUsername, &l.DormID, &l.StartPrice, &l.Step,
 		&l.CurrentPrice, &l.BidsCount, &leader, &l.MyMaxBid,
-		&created, &ends, &l.Status)
+		&created, &ends, &l.Status,
+		&l.DurationSec, &startsAt, &l.Hidden, &l.ModerationReason, &moderatedBy, &moderatedAt)
 	if err != nil {
 		return l, err
+	}
+	if startsAt.Valid {
+		v := ms(startsAt.Time)
+		l.StartsAt = &v
+	}
+	if moderatedBy.Valid {
+		v := moderatedBy.Int64
+		l.ModeratedBy = &v
+	}
+	if moderatedAt.Valid {
+		v := ms(moderatedAt.Time)
+		l.ModeratedAt = &v
 	}
 	if leader.Valid {
 		id := leader.Int64
@@ -70,8 +87,14 @@ func buildWhere(f model.LotFilter, start int) (string, []any) {
 		args = append(args, v)
 		return "$" + strconv.Itoa(start+len(args)-1)
 	}
+	if !f.All { // публично видны только опубликованные лоты
+		conds = append(conds, "(l.hidden = false AND l.status IN ('active', 'finished', 'cancelled'))")
+	}
+	if f.Started {
+		conds = append(conds, "l.status IN ('active', 'finished', 'cancelled')")
+	}
 	switch f.Status {
-	case "active", "finished", "cancelled":
+	case "active", "finished", "cancelled", "pending", "approved", "rejected":
 		conds = append(conds, effStatus+" = "+next(f.Status))
 	}
 	if f.Category != "" {
@@ -110,6 +133,8 @@ func orderBy(sort string) string {
 	switch sort {
 	case "new":
 		return "l.created_at DESC, l.id DESC"
+	case "old": // очередь модерации: давно ждущие — первыми
+		return "l.created_at ASC, l.id ASC"
 	case "price_asc":
 		return curPrice + " ASC, l.id DESC"
 	case "price_desc":
@@ -125,8 +150,39 @@ func orderBy(sort string) string {
 	}
 }
 
+// isPublic: лот виден всем (прошёл модерацию и не снят с публикации).
+func isPublic(l model.Lot) bool {
+	if l.Hidden {
+		return false
+	}
+	switch l.Status {
+	case model.StatusActive, model.StatusFinished, model.StatusCancelled:
+		return true
+	}
+	return false
+}
+
+// forViewer убирает служебные поля модерации: причину видит только автор лота,
+// сведения о модераторе — только администратор (см. adminLot).
+func forViewer(l model.Lot, viewer int64) model.Lot {
+	if l.AuthorID != viewer {
+		l.ModerationReason = ""
+	}
+	l.ModeratedBy, l.ModeratedAt = nil, nil
+	return l
+}
+
 // ListLots возвращает лоты по фильтру; limit = 0 — без ограничения.
 func (q *Queries) ListLots(ctx context.Context, viewer int64, f model.LotFilter, limit, offset int) ([]model.Lot, error) {
+	lots, err := q.listLotsRaw(ctx, viewer, f, limit, offset)
+	for i := range lots {
+		lots[i] = forViewer(lots[i], viewer)
+	}
+	return lots, err
+}
+
+// listLotsRaw — как ListLots, но с полными служебными полями (для администратора).
+func (q *Queries) listLotsRaw(ctx context.Context, viewer int64, f model.LotFilter, limit, offset int) ([]model.Lot, error) {
 	where, args := buildWhere(f, 2)
 	query := lotSelect + where + " ORDER BY " + orderBy(f.Sort)
 	all := append([]any{viewer}, args...)
@@ -163,7 +219,42 @@ func (q *Queries) queryLots(ctx context.Context, query string, args ...any) ([]m
 
 // GetLot возвращает лот; контакты второй стороны добавляются только продавцу и победителю
 // завершённого лота со ставками.
+//
+// Лот, не прошедший модерацию или снятый с публикации, виден только автору, администратору
+// и пользователю, который уже делал на него ставки; для остальных его «нет».
 func (q *Queries) GetLot(ctx context.Context, viewer, id int64) (model.Lot, error) {
+	l, err := q.getLotRaw(ctx, viewer, id)
+	if err != nil {
+		return l, err
+	}
+	admin := false
+	if viewer > 0 && viewer != l.AuthorID && (!isPublic(l) || l.ModerationReason != "") {
+		if role, _, err := q.UserAccess(ctx, viewer); err == nil {
+			admin = role == model.RoleAdmin
+		}
+	}
+	if !isPublic(l) && viewer != l.AuthorID && !admin {
+		var bidder bool
+		if viewer > 0 {
+			if err := q.db.QueryRowContext(ctx,
+				`SELECT EXISTS (SELECT 1 FROM bids WHERE lot_id = $1 AND user_id = $2)`, id, viewer).Scan(&bidder); err != nil {
+				return model.Lot{}, err
+			}
+		}
+		if !bidder {
+			return model.Lot{}, ErrNotFound
+		}
+	}
+	if admin {
+		l.ModeratedBy, l.ModeratedAt = nil, nil // подробности модерации — в админ-запросах
+	} else {
+		l = forViewer(l, viewer)
+	}
+	return l, nil
+}
+
+// getLotRaw читает лот без проверок видимости; контакты второй стороны добавляются как в GetLot.
+func (q *Queries) getLotRaw(ctx context.Context, viewer, id int64) (model.Lot, error) {
 	l, err := scanLot(q.db.QueryRowContext(ctx, lotSelect+" WHERE l.id = $2", viewer, id))
 	if err != nil {
 		return l, mapErr(err)
@@ -179,7 +270,7 @@ func (q *Queries) GetLot(ctx context.Context, viewer, id int64) (model.Lot, erro
 		}
 		if otherID > 0 {
 			c := model.Contact{Role: role}
-			err := q.db.QueryRowContext(ctx, `SELECT name, telegram FROM users WHERE id = $1`, otherID).
+			err := q.db.QueryRowContext(ctx, `SELECT name, COALESCE(telegram, '') FROM users WHERE id = $1`, otherID).
 				Scan(&c.Name, &c.Telegram)
 			if err == nil {
 				l.Contact = &c
@@ -195,15 +286,38 @@ type NewLot struct {
 	Hours                                            float64
 }
 
+// CreateLot создаёт заявку на лот: он получает статус pending и попадает в публичный каталог
+// только после одобрения администратором. ends_at пока расчётный (создание + длительность);
+// настоящий срок аукцион получит в момент старта.
 func (q *Queries) CreateLot(ctx context.Context, authorID int64, n NewLot) (model.Lot, error) {
-	endsAt := time.Now().Add(time.Duration(n.Hours * float64(time.Hour)))
+	durSec := int64(math.Round(n.Hours * 3600))
+	if durSec < 1 {
+		durSec = 1
+	}
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Lot{}, err
+	}
+	defer tx.Rollback()
+
 	var id int64
-	err := q.db.QueryRowContext(ctx,
-		`INSERT INTO lots (title, description, image, category_id, subcategory_id, author_id, start_price, step, ends_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-		n.Title, n.Description, n.Image, n.Category, n.Subcategory, authorID, n.StartPrice, n.Step, endsAt).Scan(&id)
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO lots (title, description, image, category_id, subcategory_id, author_id, start_price, step,
+		                   status, duration_seconds, ends_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, clock_timestamp() + make_interval(secs => $10::float8))
+		 RETURNING id`,
+		n.Title, n.Description, n.Image, n.Category, n.Subcategory, authorID, n.StartPrice, n.Step, durSec, float64(durSec)).Scan(&id)
 	if err != nil {
 		return model.Lot{}, mapErr(err)
+	}
+	if err := insertEvent(ctx, tx, EventInput{
+		Type: model.EvLotCreated, UserID: authorID, ActorID: authorID, LotID: id,
+		Details: map[string]any{"title": n.Title, "startPrice": n.StartPrice, "step": n.Step, "durationSec": durSec},
+	}); err != nil {
+		return model.Lot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Lot{}, err
 	}
 	return q.GetLot(ctx, authorID, id)
 }
@@ -239,7 +353,13 @@ func (q *Queries) CancelLot(ctx context.Context, lotID, userID int64) error {
 	if bids > 0 {
 		return model.Errf(409, "has_bids", "Нельзя отменить лот, на который уже сделаны ставки")
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE lots SET status = 'cancelled' WHERE id = $1`, lotID); err != nil {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE lots SET status = 'cancelled', cancelled_at = clock_timestamp() WHERE id = $1`, lotID); err != nil {
+		return err
+	}
+	if err := insertEvent(ctx, tx, EventInput{
+		Type: model.EvLotCancelled, UserID: userID, ActorID: userID, LotID: lotID,
+	}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -251,7 +371,11 @@ func (q *Queries) SimilarLots(ctx context.Context, viewer, lotID int64, limit in
 		AND l.category_id = (SELECT category_id FROM lots WHERE id = $2)
 		ORDER BY (l.subcategory_id <> (SELECT subcategory_id FROM lots WHERE id = $2)), l.ends_at ASC, l.id DESC
 		LIMIT $3`
-	return q.queryLots(ctx, query, viewer, lotID, limit)
+	lots, err := q.queryLots(ctx, query, viewer, lotID, limit)
+	for i := range lots {
+		lots[i] = forViewer(lots[i], viewer)
+	}
+	return lots, err
 }
 
 // RandomLotID возвращает id случайного активного лота (0 — если таких нет).

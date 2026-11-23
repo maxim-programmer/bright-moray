@@ -9,16 +9,37 @@ type Dorm struct {
 	Name string `json:"name"`
 }
 
+// Роли пользователей.
+const (
+	RoleUser  = "user"
+	RoleAdmin = "admin"
+)
+
 // User — полный профиль, отдаётся только самому пользователю.
 type User struct {
 	ID        int64  `json:"id"`
 	Username  string `json:"username"`
 	Password  string `json:"-"`
 	Name      string `json:"name"`
-	Telegram  string `json:"telegram"`
-	DormID    int16  `json:"dormId"`
+	Telegram  string `json:"telegram"` // у администратора, созданного через терминал, может быть пустым
+	DormID    int16  `json:"dormId"`   // 0 — общежитие не выбрано
 	CreatedAt int64  `json:"createdAt"`
+	Role      string `json:"role"` // user | admin
+	Blocked   bool   `json:"-"`    // заблокированный пользователь не может войти и пользоваться сервисом
 }
+
+// IsAdmin сообщает, что у пользователя роль администратора.
+func (u User) IsAdmin() bool { return u.Role == RoleAdmin }
+
+// Статусы лота (колонка lots.status).
+const (
+	StatusPending   = "pending"   // ожидает одобрения администратора
+	StatusApproved  = "approved"  // одобрен, ожидает начала аукциона
+	StatusRejected  = "rejected"  // отклонён администратором
+	StatusActive    = "active"    // участвует в аукционе
+	StatusFinished  = "finished"  // аукцион завершён
+	StatusCancelled = "cancelled" // аукцион отменён
+)
 
 type Category struct {
 	ID          string        `json:"id"`
@@ -57,8 +78,16 @@ type Lot struct {
 	MyMaxBid       int      `json:"myMaxBid"` // 0 — если ставок нет или не авторизован
 	CreatedAt      int64    `json:"createdAt"`
 	EndsAt         int64    `json:"endsAt"`
-	Status         string   `json:"status"` // active | finished | cancelled (уже с учётом ends_at)
+	Status         string   `json:"status"` // pending | approved | rejected | active | finished | cancelled (active — уже с учётом ends_at)
 	Contact        *Contact `json:"contact,omitempty"`
+
+	// Модерация. Причину (отказа, снятия, отмены) видят автор лота и администраторы.
+	DurationSec      int64  `json:"durationSec"`      // заявленная длительность аукциона
+	StartsAt         *int64 `json:"startsAt"`         // начало аукциона (мс Unix); nil — ещё не назначено
+	Hidden           bool   `json:"hidden,omitempty"` // снят с публикации администратором
+	ModerationReason string `json:"moderationReason,omitempty"`
+	ModeratedBy      *int64 `json:"moderatedBy,omitempty"` // только в ответах для администратора
+	ModeratedAt      *int64 `json:"moderatedAt,omitempty"` // только в ответах для администратора
 }
 
 type Bid struct {
@@ -84,6 +113,12 @@ type LotFilter struct {
 	PriceMin, PriceMax             int
 	DormID                         int
 	AuthorID, BidderID             int64
+	// All отключает ограничение публичной видимости (лоты на модерации, отклонённые,
+	// снятые с публикации). Включается только для «моих» списков и административных запросов.
+	All bool
+	// Started оставляет только лоты, прошедшие модерацию и дошедшие до аукциона
+	// (active, finished, cancelled) — «аукционы» в админ-панели.
+	Started bool
 }
 
 // APIError — ожидаемая ошибка бизнес-правил: хэндлер отдаёт её как есть.

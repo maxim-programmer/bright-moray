@@ -14,6 +14,11 @@ func (q *Queries) GetLotLive(ctx context.Context, id int64) (model.LotLive, erro
 	if err != nil {
 		return model.LotLive{}, mapErr(err)
 	}
+	// Лот до модерации и после отказа в реалтайме «не существует»: подписаться на него нельзя.
+	switch l.Status {
+	case model.StatusPending, model.StatusApproved, model.StatusRejected:
+		return model.LotLive{}, ErrNotFound
+	}
 	return l.Live(), nil
 }
 

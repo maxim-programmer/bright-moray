@@ -160,6 +160,18 @@ func NormalizeOrigin(raw string) (string, error) {
 	return u.Scheme + "://" + u.Host, nil
 }
 
+// LoadDatabase читает только параметры подключения к БД (DB_*). Нужна служебным утилитам,
+// которым не требуются JWT_SECRET и остальные настройки сервера.
+func LoadDatabase() Config {
+	return Config{
+		DBHost:     env("DB_HOST", "localhost"),
+		DBPort:     env("DB_PORT", "5432"),
+		DBName:     env("DB_NAME", "auction"),
+		DBUser:     env("DB_USER", "auction_user"),
+		DBPassword: env("DB_PASSWORD", "auction_pass"),
+	}
+}
+
 func (c Config) DSN() string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		c.DBUser, c.DBPassword, c.DBHost, c.DBPort, c.DBName)

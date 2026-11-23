@@ -58,7 +58,13 @@ type Store interface {
 
 // Options — настройки хаба. Нулевые значения заменяются разумными по умолчанию.
 type Options struct {
-	AntiSnipe      db.AntiSnipe
+	AntiSnipe db.AntiSnipe
+	// AntiSnipeFunc, если задана, возвращает действующие правила продления на момент ставки
+	// (администратор меняет их без перезапуска). Иначе используется AntiSnipe.
+	AntiSnipeFunc func(ctx context.Context) db.AntiSnipe
+	// OnFinish вызывается, когда у аукциона вышел срок и подписчикам разослан lot_finished:
+	// здесь фиксируется завершение (статус и журнал). Ошибки обрабатывает сам обработчик.
+	OnFinish       func(ctx context.Context, lotID int64)
 	AllowedOrigins []string // дополнительные Origin для WebSocket (помимо совпадающего с Host)
 	MaxConns       int
 	SendBuffer     int // размер очереди исходящих сообщений на клиента
@@ -357,7 +363,7 @@ func (h *Hub) PlaceBid(ctx context.Context, lotID, userID int64, amount int) (Pl
 	mu.Lock()
 	defer mu.Unlock()
 
-	res, err := h.store.PlaceBid(ctx, lotID, userID, amount, h.opts.AntiSnipe)
+	res, err := h.store.PlaceBid(ctx, lotID, userID, amount, h.antiSnipe(ctx))
 	if err != nil {
 		return Placed{}, err
 	}
@@ -404,9 +410,49 @@ func (h *Hub) CancelLot(ctx context.Context, lotID, userID int64) error {
 	return nil
 }
 
-// LotCreated ставит таймер завершения на только что созданный лот.
+// LotCreated ставит таймер завершения на лот, у которого только что начался аукцион.
 func (h *Hub) LotCreated(lotID int64, endsAt time.Time) {
 	h.schedule(lotID, time.Until(endsAt))
+}
+
+// antiSnipe возвращает действующие правила продления аукциона.
+func (h *Hub) antiSnipe(ctx context.Context) db.AntiSnipe {
+	if h.opts.AntiSnipeFunc != nil {
+		return h.opts.AntiSnipeFunc(ctx)
+	}
+	return h.opts.AntiSnipe
+}
+
+// LotClosed вызывается после того, как администратор принудительно завершил (finished = true)
+// или отменил (false) аукцион: таймер снимается, подписчики получают lot_finished / lot_cancelled.
+// Операция идёт под тем же мьютексом, что и ставки, поэтому порядок событий сохраняется.
+func (h *Hub) LotClosed(ctx context.Context, lotID int64, finished bool) {
+	mu := h.lotLock(lotID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	h.stopTimer(lotID)
+	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
+	defer cancel()
+	live, err := h.store.GetLotLive(bg, lotID)
+	if err != nil {
+		h.logger(ctx).Error("failed to load lot state after admin action", zap.Int64("lot_id", lotID), zap.Error(err))
+		return
+	}
+	typ := "lot_cancelled"
+	if finished {
+		typ = "lot_finished"
+	}
+	h.logger(ctx).Info("auction closed by admin", zap.Int64("lot_id", lotID), zap.String("event", typ))
+	h.publish(lotID, lotEvent{Type: typ, LotID: lotID, Lot: live, Now: nowMs()})
+}
+
+// LotRemoved снимает таймер удалённого лота.
+func (h *Hub) LotRemoved(lotID int64) {
+	mu := h.lotLock(lotID)
+	mu.Lock()
+	defer mu.Unlock()
+	h.stopTimer(lotID)
 }
 
 /* ---------- планировщик завершения ---------- */
@@ -500,6 +546,9 @@ func (h *Hub) finish(lotID int64, gen uint64) {
 	h.dropTimer(lotID, gen)
 	h.log.Info("auction finished", zap.Int64("lot_id", lotID))
 	h.publish(lotID, lotEvent{Type: "lot_finished", LotID: lotID, Lot: live, Now: nowMs()})
+	if h.opts.OnFinish != nil {
+		h.opts.OnFinish(ctx, lotID)
+	}
 }
 
 // logger возвращает логгер для записи в контексте ctx. Если у ctx есть состояние запроса

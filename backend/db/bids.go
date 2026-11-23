@@ -24,6 +24,35 @@ func formatRub(v int) string {
 	return b.String() + "\u00a0₽"
 }
 
+// GetLotBidsFor — история ставок с проверкой видимости лота для зрителя viewer (0 — аноним).
+// Лот, не прошедший модерацию или снятый с публикации, виден только автору, администратору
+// и пользователю, делавшему на него ставки; для остальных его «нет».
+func (q *Queries) GetLotBidsFor(ctx context.Context, viewer, lotID int64) ([]model.Bid, error) {
+	var author int64
+	var hidden bool
+	var status string
+	err := q.db.QueryRowContext(ctx, `SELECT author_id, hidden, status FROM lots WHERE id = $1`, lotID).
+		Scan(&author, &hidden, &status)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	public := !hidden && (status == model.StatusActive || status == model.StatusFinished || status == model.StatusCancelled)
+	if !public && viewer != author {
+		ok := false
+		if viewer > 0 {
+			if err := q.db.QueryRowContext(ctx, `
+				SELECT EXISTS (SELECT 1 FROM bids WHERE lot_id = $1 AND user_id = $2)
+				    OR EXISTS (SELECT 1 FROM users WHERE id = $2 AND role = 'admin')`, lotID, viewer).Scan(&ok); err != nil {
+				return nil, err
+			}
+		}
+		if !ok {
+			return nil, ErrNotFound
+		}
+	}
+	return q.GetLotBids(ctx, lotID)
+}
+
 func (q *Queries) GetLotBids(ctx context.Context, lotID int64) ([]model.Bid, error) {
 	var exists bool
 	if err := q.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM lots WHERE id = $1)`, lotID).Scan(&exists); err != nil {
@@ -94,10 +123,24 @@ func (q *Queries) PlaceBid(ctx context.Context, lotID, userID int64, amount int,
 	if err != nil {
 		return res, mapErr(err)
 	}
+	// Заблокированный пользователь не может делать ставки, даже если его access-токен ещё жив
+	// или он подключён по WebSocket. Несуществующего пользователя отвергнет внешний ключ ниже.
+	var blocked bool
+	switch err := tx.QueryRowContext(ctx, `SELECT blocked_at IS NOT NULL FROM users WHERE id = $1`, userID).Scan(&blocked); {
+	case err == sql.ErrNoRows:
+	case err != nil:
+		return res, err
+	case blocked:
+		return res, model.Errf(403, "account_blocked", "Ваш аккаунт заблокирован")
+	}
 	if authorID == userID {
 		return res, model.Errf(403, "own_lot", "Нельзя делать ставку на свой лот")
 	}
-	if status != "active" || !endsAt.After(dbNow) {
+	switch status {
+	case model.StatusPending, model.StatusApproved, model.StatusRejected:
+		return res, ErrNotFound // лот ещё не опубликован: для остальных его не существует
+	}
+	if status != model.StatusActive || !endsAt.After(dbNow) {
 		return res, model.Errf(409, "lot_closed", "Аукцион уже закрыт")
 	}
 
@@ -146,6 +189,13 @@ func (q *Queries) PlaceBid(ctx context.Context, lotID, userID int64, amount int,
 			}
 			endsAt, left, res.Extended = newEnds, as.Extend, true
 		}
+	}
+
+	if err := insertEvent(ctx, tx, EventInput{
+		Type: model.EvBidPlaced, UserID: userID, ActorID: userID, LotID: lotID,
+		Details: map[string]any{"amount": amount, "bidId": res.Bid.ID, "extended": res.Extended},
+	}); err != nil {
+		return res, err
 	}
 
 	if err := tx.Commit(); err != nil {

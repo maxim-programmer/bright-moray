@@ -7,12 +7,13 @@ import (
 	"auction/model"
 )
 
-const userCols = `id, username, password, name, telegram, dorm_id, created_at`
+// У администратора, созданного через терминал, Telegram и общежития может не быть (NULL).
+const userCols = `id, username, password, name, COALESCE(telegram, ''), COALESCE(dorm_id, 0), created_at, role, blocked_at IS NOT NULL`
 
 func scanUser(row interface{ Scan(...any) error }) (model.User, error) {
 	var u model.User
 	var created time.Time
-	err := row.Scan(&u.ID, &u.Username, &u.Password, &u.Name, &u.Telegram, &u.DormID, &created)
+	err := row.Scan(&u.ID, &u.Username, &u.Password, &u.Name, &u.Telegram, &u.DormID, &created, &u.Role, &u.Blocked)
 	u.CreatedAt = ms(created)
 	return u, mapErr(err)
 }

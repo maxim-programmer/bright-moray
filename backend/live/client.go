@@ -121,7 +121,9 @@ func (c *client) closeWith(code int, reason string) {
 }
 
 func (c *client) sendHello() {
-	as := c.h.opts.AntiSnipe
+	ctx, cancel := context.WithTimeout(c.ctx, dbTimeout)
+	as := c.h.antiSnipe(ctx)
+	cancel()
 	hello := helloMsg{
 		Type: "hello", Now: nowMs(),
 		AntiSnipe: antiSnipeInfo{Enabled: as.Enabled()},
