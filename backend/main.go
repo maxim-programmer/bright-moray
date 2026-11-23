@@ -67,6 +67,7 @@ func main() {
 	cleanupCtx, stopCleanup := context.WithCancel(context.Background())
 	defer stopCleanup()
 	h.StartSessionCleanup(cleanupCtx)
+	h.StartLotScheduler(cleanupCtx) // старт одобренных лотов по расписанию и фиксация завершённых аукционов
 
 	mux := http.NewServeMux()
 	handler.SetupRoutes(mux, h)
