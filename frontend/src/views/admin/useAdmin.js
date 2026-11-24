@@ -37,6 +37,20 @@ export function useLoader(fn) {
   return { loading, error, status, run }
 }
 
+// Выполняет fn для каждого элемента, не больше limit запросов одновременно; порядок результатов сохраняется.
+export async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length)
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
+}
+
 // Действие администратора (POST/PUT/DELETE): busy на время запроса, текст ошибки при неудаче.
 // exec возвращает результат или undefined, если действие не удалось.
 export function useAction() {

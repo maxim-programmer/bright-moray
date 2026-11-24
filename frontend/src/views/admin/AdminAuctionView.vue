@@ -1,11 +1,12 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import ReasonDialog from '../../components/admin/ReasonDialog.vue'
 import { vStack } from '../../components/admin/stackTable'
 import { adminApi } from '../../api'
 import { state, formatDate, formatMoney, getCategory } from '../../store'
 import { adminStatusText, statusClass } from '../../status'
+import { AUCTION_DIALOGS } from './auctionDialogs'
 import { useLoader, useAction } from './useAdmin'
 
 const route = useRoute()
@@ -26,6 +27,9 @@ const lot = computed(() => detail.value?.lot)
 const running = computed(() => lot.value && lot.value.status === 'active' && lot.value.endsAt > state.now && !detail.value.closed)
 // завершён, но не отменён: по такому аукциону можно разбирать споры
 const finished = computed(() => lot.value && detail.value.closed && lot.value.status !== 'cancelled')
+
+// у отменённого аукциона победителя нет
+const cancelled = computed(() => lot.value?.status === 'cancelled')
 
 /* --- действия --- */
 
@@ -54,44 +58,14 @@ async function confirm(reason) {
   }
 }
 
-const DIALOGS = {
-  finish: {
-    title: 'Завершить аукцион досрочно',
-    hint: 'Победителем станет текущий лидер. Торги закроются сразу.',
-    confirm: 'Завершить',
-    required: false,
-    danger: false
-  },
-  cancel: {
-    title: 'Отменить аукцион',
-    hint: 'Ставки сохранятся в истории, но аукцион закроется без победителя. Причину увидит автор.',
-    confirm: 'Отменить аукцион',
-    required: true,
-    danger: true
-  },
-  dismiss: {
-    title: 'Спор рассмотрен — результат остаётся',
-    hint: 'Запишите решение: оно попадёт в журнал событий.',
-    confirm: 'Зафиксировать решение',
-    required: true,
-    danger: false
-  },
-  annul: {
-    title: 'Аннулировать результат',
-    hint: 'Аукцион станет отменённым, победитель и итоговая цена теряют силу.',
-    confirm: 'Аннулировать',
-    required: true,
-    danger: true
-  },
-  remove: {
-    title: 'Удалить спорную ставку',
-    hint: 'Победитель и итоговая цена будут пересчитаны по оставшимся ставкам.',
-    confirm: 'Удалить ставку',
-    required: true,
-    danger: true
-  }
-}
-const dlg = computed(() => (dialog.value ? DIALOGS[dialog.value.kind] : null))
+const dlg = computed(() => (dialog.value ? AUCTION_DIALOGS[dialog.value.kind] : null))
+
+// Срок вышел, пока страница открыта: перечитываем итог (аукцион могли и продлить)
+let timer
+watch(running, (now, before) => {
+  if (before && !now && !detail.value.closed) timer = setTimeout(load, 1500)
+})
+onUnmounted(() => clearTimeout(timer))
 
 onMounted(load)
 </script>
@@ -121,13 +95,13 @@ onMounted(load)
           · {{ detail.author.name }}<template v-if="detail.author.telegram"> · @{{ detail.author.telegram }}</template>
         </dd>
         <dd v-else>—</dd>
-        <dt>{{ detail.closed ? 'Победитель' : 'Лидирует' }}</dt>
+        <dt>{{ cancelled ? 'Лидировал до отмены' : detail.closed ? 'Победитель' : 'Лидирует' }}</dt>
         <dd v-if="detail.winner">
           <router-link :to="'/admin/users/' + detail.winner.id" class="admin-link">{{ detail.winner.username }}</router-link>
           · {{ detail.winner.name }}<template v-if="detail.winner.telegram"> · @{{ detail.winner.telegram }}</template>
         </dd>
         <dd v-else>ставок нет</dd>
-        <dt>{{ detail.closed ? 'Итоговая стоимость' : 'Текущая цена' }}</dt>
+        <dt>{{ cancelled ? 'Цена на момент отмены' : detail.closed ? 'Итоговая стоимость' : 'Текущая цена' }}</dt>
         <dd>{{ detail.finalPrice != null ? formatMoney(detail.finalPrice) : '—' }}</dd>
         <template v-if="lot.moderationReason">
           <dt>Комментарий администратора</dt><dd>{{ lot.moderationReason }}</dd>
@@ -162,7 +136,7 @@ onMounted(load)
               <td class="nowrap">{{ formatDate(b.createdAt) }}</td>
               <td>
                 <router-link :to="'/admin/users/' + b.userId" class="admin-link">{{ b.username }}</router-link>
-                <span v-if="i === 0" class="pill good">{{ detail.closed ? 'победитель' : 'лидер' }}</span>
+                <span v-if="i === 0 && !cancelled" class="pill good">{{ detail.closed ? 'победитель' : 'лидер' }}</span>
               </td>
               <td class="num"><b>{{ formatMoney(b.amount) }}</b></td>
               <td>
