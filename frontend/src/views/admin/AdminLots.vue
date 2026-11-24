@@ -60,7 +60,7 @@ function goTo(p) {
 
 /* --- быстрые действия над заявками --- */
 
-const dialog = ref(null) // { kind: 'approve' | 'reject', lot }
+const dialog = ref(null) // { kind: 'approve' | 'reject' | 'unpublish', lot }
 const action = useAction()
 
 function open(kind, lot) {
@@ -82,6 +82,19 @@ async function reject(reason) {
     dialog.value = null
     load()
   }
+}
+
+async function unpublish(reason) {
+  const lot = dialog.value.lot
+  if (await action.exec(() => adminApi.unpublishLot(lot.id, reason))) {
+    dialog.value = null
+    load()
+  }
+}
+
+// Заявку отклоняют, а снять с публикации можно одобренный, идущий или закрытый лот
+function canUnpublish(lot) {
+  return !lot.hidden && !['pending', 'rejected'].includes(lot.status)
 }
 
 onMounted(load)
@@ -135,12 +148,16 @@ watch(
           <td class="num">{{ formatMoney(l.startPrice) }}</td>
           <td>
             <span class="pill" :class="statusClass(l)">{{ adminStatusText(l) }}</span>
+            <div v-if="l.moderationReason" class="muted small">{{ l.moderationReason }}</div>
           </td>
           <td class="nowrap">{{ formatDate(l.createdAt) }}</td>
           <td>
             <div v-if="l.status === 'pending'" class="row-actions">
               <button class="button small" type="button" @click="open('approve', l)">Одобрить</button>
               <button class="button small danger" type="button" @click="open('reject', l)">Отклонить</button>
+            </div>
+            <div v-else-if="canUnpublish(l)" class="row-actions">
+              <button class="button small danger" type="button" @click="open('unpublish', l)">Снять</button>
             </div>
           </td>
         </tr>
@@ -165,6 +182,17 @@ watch(
     :busy="action.busy.value"
     :error="action.error.value"
     @confirm="reject"
+    @cancel="dialog = null"
+  />
+  <ReasonDialog
+    v-if="dialog && dialog.kind === 'unpublish'"
+    :title="'Снять с публикации «' + dialog.lot.title + '»'"
+    hint="Лот исчезнет из каталога. Идущий или ожидающий старта аукцион будет отменён. Причину увидит автор."
+    confirm-text="Снять с публикации"
+    danger
+    :busy="action.busy.value"
+    :error="action.error.value"
+    @confirm="unpublish"
     @cancel="dialog = null"
   />
 </template>
