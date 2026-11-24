@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import Pagination from '../../components/Pagination.vue'
+import ActivityCharts from '../../components/admin/ActivityCharts.vue'
 import ConfirmDialog from '../../components/admin/ConfirmDialog.vue'
 import ReasonDialog from '../../components/admin/ReasonDialog.vue'
 import { vStack } from '../../components/admin/stackTable'
@@ -9,6 +10,7 @@ import { adminApi } from '../../api'
 import { state, formatDate, formatMoney, getDormLabel } from '../../store'
 import { adminStatusText, statusClass } from '../../status'
 import { describeEvent, dayStart, dayEnd } from './format'
+import { PRESETS, presetPeriod, periodError } from './period'
 import { useLoader, useAction } from './useAdmin'
 
 const route = useRoute()
@@ -17,8 +19,11 @@ const id = computed(() => Number(route.params.id))
 const user = ref(null)
 const stats = ref(null)
 const notFound = ref(false)
-const from = ref('')
-const to = ref('')
+const isDate = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
+const from = ref(isDate(route.query.from) ? route.query.from : '')
+const to = ref(isDate(route.query.to) ? route.query.to : '')
+const applied = ref({ from: from.value, to: to.value }) // период, который прошёл проверку
+const badPeriod = ref('')
 const tab = ref('activity')
 
 const loadUser = useLoader(() => adminApi.user(id.value))
@@ -28,7 +33,8 @@ async function refreshUser() {
   const data = await loadUser.run()
   if (data) {
     user.value = data.user
-    stats.value = data.stats
+    if (!applied.value.from && !applied.value.to) stats.value = data.stats
+    else refreshStats() // карточка отдаёт статистику за всё время, а выбран период
   } else if (loadUser.status.value === 404) {
     notFound.value = true
   }
@@ -76,7 +82,23 @@ function goTo(p) {
   refreshTab()
 }
 
+const METRICS = [
+  { key: 'events', name: 'События' },
+  { key: 'bidsPlaced', name: 'Ставки' },
+  { key: 'lotsCreated', name: 'Созданные лоты' }
+]
+const fetchStats = (period) => adminApi.userStats(id.value, period)
+
+function setPeriod(p) {
+  from.value = p.from
+  to.value = p.to
+  applyPeriod()
+}
+
 function applyPeriod() {
+  badPeriod.value = periodError(from.value, to.value)
+  if (badPeriod.value) return
+  applied.value = { from: from.value, to: to.value }
   pages.value.activity[0] = 1
   refreshStats()
   if (tab.value === 'activity') refreshTab()
@@ -162,6 +184,10 @@ watch(eventType, () => {
 
     <div class="admin-card">
       <h2>Статистика</h2>
+      <div class="sub-tabs">
+        <button v-for="p in PRESETS" :key="p.days" type="button" @click="setPeriod(presetPeriod(p.days))">{{ p.name }}</button>
+        <button type="button" @click="setPeriod({ from: '', to: '' })">Всё время</button>
+      </div>
       <div class="admin-bar">
         <label class="field">С даты<input v-model="from" type="date" @change="applyPeriod" /></label>
         <label class="field">По дату<input v-model="to" type="date" @change="applyPeriod" /></label>
@@ -176,7 +202,9 @@ watch(eventType, () => {
         <div class="stat-card"><div class="stat-value">{{ formatMoney(stats.earnedTotal) }}</div><div class="stat-label">Выручка</div></div>
         <div class="stat-card"><div class="stat-value">{{ stats.events }}</div><div class="stat-label">Событий в журнале</div></div>
       </div>
-      <div v-if="loadStats.error.value" class="error">{{ loadStats.error.value }}</div>
+      <div v-if="badPeriod || loadStats.error.value" class="error">{{ badPeriod || loadStats.error.value }}</div>
+      <h3 class="chart-heading">Активность по времени</h3>
+      <ActivityCharts :from="applied.from" :to="applied.to" :fetch="fetchStats" :metrics="METRICS" />
     </div>
 
     <div class="sub-tabs">

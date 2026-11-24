@@ -553,3 +553,102 @@
 .user-picker-list li[role='option']:hover {
   background: var(--light);
 }
+
+/* ================= Графики ================= */
+
+.chart-heading {
+  margin-bottom: 12px;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.chart-grid.stale {
+  opacity: 0.5;
+}
+
+.chart-card {
+  padding: 16px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.bar-chart {
+  margin: 0;
+  max-width: 640px;
+}
+
+.bar-chart figcaption {
+  margin-bottom: 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.bar-chart-plot {
+  position: relative;
+}
+
+.bar-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.bar-chart text {
+  font-size: 11px;
+  fill: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bar-chart .grid line {
+  stroke: var(--line);
+}
+
+.bar-chart .bar {
+  fill: #6a4fc4;
+}
+
+.bar-chart .bar.hovered {
+  fill: var(--main);
+}
+
+.bar-chart .hit {
+  fill: transparent;
+  outline: none;
+}
+
+.bar-chart .hit:focus-visible {
+  stroke: var(--soft);
+  stroke-width: 2;
+}
+
+.bar-chart-tip {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  transform: translate(-50%, calc(-100% - 6px));
+  pointer-events: none;
+  white-space: nowrap;
+  font-size: 12px;
+  background: var(--white);
+  border-radius: 8px;
+  box-shadow: var(--shadow-hover);
+}
+
+.bar-chart-tip b {
+  font-size: 15px;
+}
+
+.chart-data summary {
+  margin-bottom: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--main);
+}
