@@ -508,3 +508,48 @@
     padding: 12px;
   }
 }
+
+/* ================= Выбор пользователя ================= */
+
+.user-picker {
+  position: relative;
+}
+
+.user-picker > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.user-picker-list {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  min-width: 100%;
+  max-width: calc(100vw - 32px);
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 4px 0 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--white);
+  border-radius: 8px;
+  box-shadow: var(--shadow-hover);
+}
+
+.user-picker-list li {
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.user-picker-list li[role='option'] {
+  cursor: pointer;
+}
+
+.user-picker-list li.active,
+.user-picker-list li[role='option']:hover {
+  background: var(--light);
+}

@@ -1,22 +1,24 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, watch, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import Pagination from '../../components/Pagination.vue'
 import { vStack } from '../../components/admin/stackTable'
+import UserPicker from '../../components/admin/UserPicker.vue'
 import { adminApi } from '../../api'
 import { formatDate } from '../../store'
 import { describeEvent, dayStart, dayEnd } from './format'
 import { useLoader } from './useAdmin'
 
 const route = useRoute()
+const router = useRouter()
 const str = (v) => (typeof v === 'string' ? v : '')
 
 const userId = ref(str(route.query.userId))
 const lotId = ref(str(route.query.lotId))
-const type = ref('')
-const byAdmin = ref(false)
-const from = ref('')
-const to = ref('')
+const type = ref(str(route.query.type))
+const byAdmin = ref(route.query.byAdmin === 'true')
+const from = ref(str(route.query.from))
+const to = ref(str(route.query.to))
 const page = ref(1)
 
 const events = ref([])
@@ -26,8 +28,8 @@ const types = ref({ types: [], groups: [] })
 
 const loader = useLoader(() =>
   adminApi.events({
-    userId: userId.value.trim(),
-    lotId: lotId.value.trim(),
+    userId: userId.value,
+    lotId: lotId.value,
     type: type.value,
     byAdmin: byAdmin.value ? 'true' : '',
     from: dayStart(from.value),
@@ -35,6 +37,8 @@ const loader = useLoader(() =>
     page: page.value
   })
 )
+
+const periodError = ref('')
 
 async function load() {
   const data = await loader.run()
@@ -45,9 +49,22 @@ async function load() {
 }
 
 function reload() {
+  periodError.value = from.value && to.value && from.value > to.value ? 'Дата «С» должна быть не позже даты «По»' : ''
+  if (periodError.value) return
   page.value = 1
+  // фильтры — в адресе: ссылкой на выборку можно поделиться, а обновление страницы её не сбросит
+  const query = {}
+  if (userId.value) query.userId = String(userId.value)
+  if (lotId.value) query.lotId = String(lotId.value)
+  if (type.value) query.type = type.value
+  if (byAdmin.value) query.byAdmin = 'true'
+  if (from.value) query.from = from.value
+  if (to.value) query.to = to.value
+  router.replace({ query })
   load()
 }
+
+watch(userId, reload)
 
 function reset() {
   userId.value = ''
@@ -72,10 +89,7 @@ onMounted(() => {
 
 <template>
   <form class="admin-bar" @submit.prevent="reload">
-    <label class="field">
-      ID пользователя
-      <input v-model="userId" type="number" min="1" placeholder="любой" />
-    </label>
+    <UserPicker v-model="userId" />
     <label class="field">
       № лота
       <input v-model="lotId" type="number" min="1" placeholder="любой" />
@@ -99,7 +113,7 @@ onMounted(() => {
     <button class="button light" type="button" @click="reset">Сбросить</button>
   </form>
 
-  <div v-if="loader.error.value" class="error">{{ loader.error.value }}</div>
+  <div v-if="periodError || loader.error.value" class="error">{{ periodError || loader.error.value }}</div>
   <p class="muted small">Записей: {{ total }}</p>
 
   <div class="admin-table-wrap">

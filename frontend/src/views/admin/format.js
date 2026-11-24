@@ -48,6 +48,7 @@ export function describeEvent(e) {
     case 'lot.rejected':
     case 'lot.unpublished':
     case 'lot.deleted':
+    case 'lot.cancelled':
     case 'auction.cancelled':
     case 'auction.annulled':
     case 'auction.dispute_resolved':
