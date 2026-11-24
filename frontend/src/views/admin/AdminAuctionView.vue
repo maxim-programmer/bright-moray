@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import ReasonDialog from '../../components/admin/ReasonDialog.vue'
+import { vStack } from '../../components/admin/stackTable'
 import { adminApi } from '../../api'
 import { state, formatDate, formatMoney, getCategory } from '../../store'
 import { adminStatusText, statusClass } from '../../status'
@@ -154,7 +155,7 @@ onMounted(load)
       <h2>История ставок <span class="muted">({{ detail.bids.length }})</span></h2>
       <div class="admin-table-wrap">
         <div v-if="!detail.bids.length" class="admin-empty">Ставок нет.</div>
-        <table v-else class="admin-table">
+        <table v-else v-stack class="admin-table">
           <thead><tr><th>Время</th><th>Пользователь</th><th class="num">Сумма</th><th></th></tr></thead>
           <tbody>
             <tr v-for="(b, i) in detail.bids" :key="b.id">

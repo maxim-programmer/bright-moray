@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
+import { vStack } from '../../components/admin/stackTable'
 import { adminApi } from '../../api'
 import { dayStart, dayEnd, formatAvg } from './format'
 import { useLoader } from './useAdmin'
@@ -77,7 +78,7 @@ onMounted(load)
       <h2>Самые востребованные категории</h2>
       <div class="admin-table-wrap">
         <div v-if="!stats.topCategories.length" class="admin-empty">За период нет данных.</div>
-        <table v-else class="admin-table">
+        <table v-else v-stack class="admin-table">
           <thead><tr><th>Категория</th><th class="num">Ставок</th><th class="num">Лотов</th></tr></thead>
           <tbody>
             <tr v-for="c in stats.topCategories" :key="c.id">
@@ -94,7 +95,7 @@ onMounted(load)
       <h2>Самые активные пользователи</h2>
       <div class="admin-table-wrap">
         <div v-if="!stats.topUsers.length" class="admin-empty">За период нет данных.</div>
-        <table v-else class="admin-table">
+        <table v-else v-stack class="admin-table">
           <thead><tr><th>Пользователь</th><th class="num">Лотов</th><th class="num">Ставок</th><th class="num">Всего</th></tr></thead>
           <tbody>
             <tr v-for="u in stats.topUsers" :key="u.id">

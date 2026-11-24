@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import Pagination from '../../components/Pagination.vue'
+import { vStack } from '../../components/admin/stackTable'
 import { adminApi } from '../../api'
 import { formatDate } from '../../store'
 import { describeEvent, dayStart, dayEnd } from './format'
@@ -103,7 +104,7 @@ onMounted(() => {
 
   <div class="admin-table-wrap">
     <div v-if="!events.length && !loader.loading.value" class="admin-empty">Событий не найдено.</div>
-    <table v-else class="admin-table">
+    <table v-else v-stack class="admin-table">
       <thead>
         <tr><th>Время</th><th>Событие</th><th>Пользователь</th><th>Исполнитель</th><th>Лот</th><th>Подробности</th></tr>
       </thead>

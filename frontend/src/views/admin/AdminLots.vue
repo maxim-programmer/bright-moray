@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import Pagination from '../../components/Pagination.vue'
 import ReasonDialog from '../../components/admin/ReasonDialog.vue'
 import ApproveDialog from '../../components/admin/ApproveDialog.vue'
+import { vStack } from '../../components/admin/stackTable'
 import { adminApi } from '../../api'
 import { formatDate, formatMoney, getCategory } from '../../store'
 import { adminStatusText, statusClass } from '../../status'
@@ -117,7 +118,7 @@ watch(
     <div v-if="!lots.length && !loader.loading.value" class="admin-empty">
       {{ status === 'pending' ? 'Заявок на модерацию нет.' : 'Лотов не найдено.' }}
     </div>
-    <table v-else class="admin-table">
+    <table v-else v-stack class="admin-table">
       <thead>
         <tr>
           <th></th><th>№</th><th>Лот</th><th>Автор</th><th>Категория</th><th class="num">Старт. цена</th>

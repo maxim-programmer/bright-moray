@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import Pagination from '../../components/Pagination.vue'
 import ReasonDialog from '../../components/admin/ReasonDialog.vue'
+import { vStack } from '../../components/admin/stackTable'
 import { adminApi } from '../../api'
 import { state, formatDate, formatMoney, getDormLabel } from '../../store'
 import { adminStatusText, statusClass } from '../../status'
@@ -196,7 +197,7 @@ watch(eventType, () => {
       </div>
       <div class="admin-table-wrap">
         <div v-if="!events.length && !loadTab.loading.value" class="admin-empty">Событий нет.</div>
-        <table v-else class="admin-table">
+        <table v-else v-stack class="admin-table">
           <thead><tr><th>Время</th><th>Событие</th><th>Лот</th><th>Подробности</th></tr></thead>
           <tbody>
             <tr v-for="e in events" :key="e.id">
@@ -212,7 +213,7 @@ watch(eventType, () => {
 
     <div v-else-if="tab === 'lots'" class="admin-table-wrap">
       <div v-if="!lots.length && !loadTab.loading.value" class="admin-empty">Лотов нет.</div>
-      <table v-else class="admin-table">
+      <table v-else v-stack class="admin-table">
         <thead><tr><th>№</th><th>Название</th><th>Статус</th><th class="num">Цена</th><th class="num">Ставок</th><th>Создан</th></tr></thead>
         <tbody>
           <tr v-for="l in lots" :key="l.id">
@@ -229,7 +230,7 @@ watch(eventType, () => {
 
     <div v-else class="admin-table-wrap">
       <div v-if="!bids.length && !loadTab.loading.value" class="admin-empty">Ставок нет.</div>
-      <table v-else class="admin-table">
+      <table v-else v-stack class="admin-table">
         <thead><tr><th>Время</th><th>Лот</th><th class="num">Ставка</th><th>Состояние</th></tr></thead>
         <tbody>
           <tr v-for="b in bids" :key="b.id">

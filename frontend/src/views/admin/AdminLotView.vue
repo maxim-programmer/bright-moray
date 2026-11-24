@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Pagination from '../../components/Pagination.vue'
 import ReasonDialog from '../../components/admin/ReasonDialog.vue'
 import ApproveDialog from '../../components/admin/ApproveDialog.vue'
+import { vStack } from '../../components/admin/stackTable'
 import { adminApi } from '../../api'
 import { state, formatDate, formatMoney, getCategory, getSubcategory } from '../../store'
 import { adminStatusText, statusClass } from '../../status'
@@ -254,7 +255,7 @@ onMounted(async () => {
       <div v-if="loadHistory.error.value" class="error">{{ loadHistory.error.value }}</div>
       <div class="admin-table-wrap">
         <div v-if="!events.length" class="admin-empty">Записей нет.</div>
-        <table v-else class="admin-table">
+        <table v-else v-stack class="admin-table">
           <thead><tr><th>Время</th><th>Событие</th><th>Кто</th><th>Подробности</th></tr></thead>
           <tbody>
             <tr v-for="e in events" :key="e.id">

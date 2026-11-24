@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 
 // Окно подтверждения действия с причиной (отказ, снятие, отмена, блокировка…).
 const props = defineProps({
@@ -15,6 +15,8 @@ const props = defineProps({
 const emit = defineEmits(['confirm', 'cancel'])
 
 const reason = ref('')
+const input = ref(null)
+onMounted(() => input.value.focus()) // autofocus не срабатывает у элементов, добавленных позже
 const localError = ref('')
 watch(
   () => props.title,
@@ -36,13 +38,13 @@ function submit() {
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="emit('cancel')">
-    <form class="modal" role="dialog" aria-modal="true" @submit.prevent="submit" @keydown.esc="emit('cancel')">
+  <div class="modal-backdrop" @click.self="busy || emit('cancel')">
+    <form class="modal" role="dialog" aria-modal="true" :aria-label="title" @submit.prevent="submit" @keydown.esc="busy || emit('cancel')">
       <h2>{{ title }}</h2>
       <p v-if="hint" class="muted small">{{ hint }}</p>
       <label class="field">
         {{ label }}<span v-if="!required" class="muted"> (необязательно)</span>
-        <textarea v-model="reason" rows="3" maxlength="1000" autofocus></textarea>
+        <textarea ref="input" v-model="reason" rows="3" maxlength="1000"></textarea>
       </label>
       <div v-if="localError || error" class="error">{{ localError || error }}</div>
       <div class="modal-actions">

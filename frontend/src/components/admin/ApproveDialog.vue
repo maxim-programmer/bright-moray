@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { localDateTime } from '../../views/admin/format'
 
 // Одобрение лота: начать аукцион сразу или в назначенное время.
@@ -11,6 +11,8 @@ const emit = defineEmits(['confirm', 'cancel'])
 
 const mode = ref('now') // now | later
 const when = ref('')
+const first = ref(null)
+onMounted(() => first.value.focus())
 const localError = ref('')
 
 function submit() {
@@ -29,10 +31,10 @@ function submit() {
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="emit('cancel')">
-    <form class="modal" role="dialog" aria-modal="true" @submit.prevent="submit" @keydown.esc="emit('cancel')">
+  <div class="modal-backdrop" @click.self="busy || emit('cancel')">
+    <form class="modal" role="dialog" aria-modal="true" aria-label="Одобрить лот" @submit.prevent="submit" @keydown.esc="busy || emit('cancel')">
       <h2>Одобрить лот</h2>
-      <label class="radio-row"><input v-model="mode" type="radio" value="now" /> Начать аукцион сразу</label>
+      <label class="radio-row"><input ref="first" v-model="mode" type="radio" value="now" /> Начать аукцион сразу</label>
       <label class="radio-row"><input v-model="mode" type="radio" value="later" /> Начать в назначенное время</label>
       <label v-if="mode === 'later'" class="field">
         Начало аукциона

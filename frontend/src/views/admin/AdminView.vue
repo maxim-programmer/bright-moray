@@ -1,4 +1,8 @@
 <script setup>
+import { watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { state } from '../../store'
+
 // Каркас панели администратора: вкладки и место для вложенных страниц.
 const tabs = [
   { to: '/admin', name: 'Статистика', exact: true },
@@ -8,6 +12,15 @@ const tabs = [
   { to: '/admin/events', name: 'Журнал событий' },
   { to: '/admin/settings', name: 'Настройки' }
 ]
+
+// Роль сняли, пока панель открыта (см. adminError): уводим со страницы, на которую больше нет прав
+const router = useRouter()
+watch(
+  () => state.user?.role,
+  (role) => {
+    if (state.user && role !== 'admin') router.replace('/')
+  }
+)
 </script>
 
 <template>

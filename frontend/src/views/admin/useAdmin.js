@@ -1,5 +1,14 @@
 import { ref } from 'vue'
-import { handleApiError } from '../../store'
+import { api } from '../../api'
+import { state, handleApiError } from '../../store'
+
+// Сервер ответил «Недостаточно прав»: роль могли снять после входа — перечитываем профиль
+function adminError(e) {
+  if (e?.status === 403 && e.code === 'forbidden') {
+    api.me().then((user) => (state.user = user), () => {})
+  }
+  return handleApiError(e)
+}
 
 // Загрузка данных: устаревшие ответы (пришли после более нового запроса) отбрасываются.
 export function useLoader(fn) {
@@ -17,7 +26,7 @@ export function useLoader(fn) {
       return id === seq ? result : undefined
     } catch (e) {
       if (id === seq) {
-        error.value = handleApiError(e)
+        error.value = adminError(e)
         status.value = e?.status || 0
       }
       return undefined
@@ -40,7 +49,7 @@ export function useAction() {
     try {
       return (await fn()) ?? true
     } catch (e) {
-      error.value = handleApiError(e)
+      error.value = adminError(e)
       return undefined
     } finally {
       busy.value = false

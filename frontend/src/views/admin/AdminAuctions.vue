@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import Pagination from '../../components/Pagination.vue'
+import { vStack } from '../../components/admin/stackTable'
 import { adminApi } from '../../api'
 import { state, formatDate, formatMoney, getCategory } from '../../store'
 import { adminStatusText, statusClass } from '../../status'
@@ -73,7 +74,7 @@ onMounted(load)
 
   <div class="admin-table-wrap">
     <div v-if="!auctions.length && !loader.loading.value" class="admin-empty">Аукционов не найдено.</div>
-    <table v-else class="admin-table">
+    <table v-else v-stack class="admin-table">
       <thead>
         <tr>
           <th>№</th><th>Лот</th><th>Автор</th><th>Категория</th><th class="num">Цена</th>

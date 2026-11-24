@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { adminApi } from '../../api'
 import { state, reloadReferences, handleApiError } from '../../store'
+import ConfirmDialog from '../../components/admin/ConfirmDialog.vue'
 import { minutesText } from './format'
 import { useLoader, useAction } from './useAdmin'
 
@@ -77,6 +78,18 @@ async function refAction(fn) {
   }
 }
 
+// Удаление — только после подтверждения
+const removal = ref(null) // { title, run }
+
+function askRemove(title, run) {
+  refError.value = ''
+  removal.value = { title, run }
+}
+
+async function confirmRemove() {
+  if (await refAction(removal.value.run)) removal.value = null
+}
+
 async function addCategory() {
   const name = newCategory.value.trim()
   if (!name) return
@@ -89,9 +102,8 @@ async function renameCategory(c) {
   await refAction(() => adminApi.updateCategory(c.id, { name: name.trim(), description: c.description || '' }))
 }
 
-async function removeCategory(c) {
-  if (!window.confirm(`Удалить категорию «${c.name}» вместе с подкатегориями?`)) return
-  await refAction(() => adminApi.deleteCategory(c.id))
+function removeCategory(c) {
+  askRemove(`Удалить категорию «${c.name}» вместе с подкатегориями?`, () => adminApi.deleteCategory(c.id))
 }
 
 async function addSub(c) {
@@ -106,9 +118,8 @@ async function renameSub(c, s) {
   await refAction(() => adminApi.updateSub(c.id, s.id, { name: name.trim() }))
 }
 
-async function removeSub(c, s) {
-  if (!window.confirm(`Удалить подкатегорию «${s.name}»?`)) return
-  await refAction(() => adminApi.deleteSub(c.id, s.id))
+function removeSub(c, s) {
+  askRemove(`Удалить подкатегорию «${s.name}»?`, () => adminApi.deleteSub(c.id, s.id))
 }
 
 async function addDorm() {
@@ -123,9 +134,8 @@ async function renameDorm(d) {
   await refAction(() => adminApi.updateDorm(d.id, { name: name.trim() }))
 }
 
-async function removeDorm(d) {
-  if (!window.confirm(`Удалить общежитие «${d.name}»?`)) return
-  await refAction(() => adminApi.deleteDorm(d.id))
+function removeDorm(d) {
+  askRemove(`Удалить общежитие «${d.name}»?`, () => adminApi.deleteDorm(d.id))
 }
 
 onMounted(loadAll)
@@ -158,7 +168,7 @@ onMounted(loadAll)
     </form>
   </section>
 
-  <div v-if="refError" class="error">{{ refError }}</div>
+  <div v-if="refError && !removal" class="error">{{ refError }}</div>
 
   <section class="admin-section">
     <h2>Категории и подкатегории</h2>
@@ -210,4 +220,15 @@ onMounted(loadAll)
       <p class="muted small">Общежитие, в котором есть пользователи, удалить нельзя.</p>
     </div>
   </section>
+  <ConfirmDialog
+    v-if="removal"
+    :title="removal.title"
+    hint="Отменить удаление нельзя."
+    confirm-text="Удалить"
+    danger
+    :busy="refBusy"
+    :error="refError"
+    @confirm="confirmRemove"
+    @cancel="removal = null"
+  />
 </template>

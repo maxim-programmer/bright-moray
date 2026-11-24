@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import Pagination from '../../components/Pagination.vue'
+import { vStack } from '../../components/admin/stackTable'
 import { adminApi } from '../../api'
 import { formatDate } from '../../store'
 import { useLoader } from './useAdmin'
@@ -68,7 +69,7 @@ onMounted(load)
 
   <div class="admin-table-wrap">
     <div v-if="!users.length && !loader.loading.value" class="admin-empty">Никого не найдено.</div>
-    <table v-else class="admin-table">
+    <table v-else v-stack class="admin-table">
       <thead>
         <tr>
           <th>ID</th><th>Никнейм</th><th>Имя</th><th>Telegram</th><th>Роль</th><th>Состояние</th>
