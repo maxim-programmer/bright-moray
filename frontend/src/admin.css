@@ -652,3 +652,18 @@
   font-weight: 600;
   color: var(--main);
 }
+
+/* С кнопкой панели шапка шире: переносим меню раньше, чем на остальном сайте (860px) */
+@media (max-width: 1024px) {
+  .header-inner:has(.admin-button) {
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .header-inner:has(.admin-button) .nav {
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+  }
+}
