@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import Pagination from '../../components/Pagination.vue'
+import ConfirmDialog from '../../components/admin/ConfirmDialog.vue'
 import ReasonDialog from '../../components/admin/ReasonDialog.vue'
 import { vStack } from '../../components/admin/stackTable'
 import { adminApi } from '../../api'
@@ -83,8 +84,13 @@ function applyPeriod() {
 
 /* --- блокировка --- */
 
-const dialog = ref('') // '' | 'block'
+const dialog = ref('') // '' | 'block' | 'unblock'
 const action = useAction()
+
+function open(kind) {
+  action.error.value = ''
+  dialog.value = kind
+}
 
 async function block(reason) {
   const updated = await action.exec(() => adminApi.blockUser(id.value, reason))
@@ -98,6 +104,7 @@ async function block(reason) {
 async function unblock() {
   const updated = await action.exec(() => adminApi.unblockUser(id.value))
   if (updated) {
+    dialog.value = ''
     await refreshUser()
     if (tab.value === 'activity') refreshTab()
   }
@@ -139,15 +146,15 @@ watch(eventType, () => {
         <dt>Зарегистрирован</dt><dd>{{ formatDate(user.createdAt) }}</dd>
         <dt>Последняя активность</dt><dd>{{ user.lastActivity ? formatDate(user.lastActivity) : '—' }}</dd>
         <template v-if="user.blocked">
-          <dt>Заблокирован</dt><dd>{{ formatDate(user.blockedAt) }}</dd>
+          <dt>Заблокирован</dt><dd>{{ formatDate(user.blockedAt) }}<template v-if="user.blockedBy"> · администратор №{{ user.blockedBy }}</template></dd>
           <dt>Причина блокировки</dt><dd>{{ user.blockedReason || 'не указана' }}</dd>
         </template>
       </dl>
       <div v-if="action.error.value && !dialog" class="error">{{ action.error.value }}</div>
       <div class="admin-actions">
         <template v-if="user.role !== 'admin' && !isSelf">
-          <button v-if="!user.blocked" class="button danger" type="button" @click="dialog = 'block'">Заблокировать</button>
-          <button v-else class="button" type="button" :disabled="action.busy.value" @click="unblock">Разблокировать</button>
+          <button v-if="!user.blocked" class="button danger" type="button" @click="open('block')">Заблокировать</button>
+          <button v-else class="button" type="button" @click="open('unblock')">Разблокировать</button>
         </template>
         <span v-else class="muted small">Администратора заблокировать нельзя.</span>
       </div>
@@ -198,11 +205,16 @@ watch(eventType, () => {
       <div class="admin-table-wrap">
         <div v-if="!events.length && !loadTab.loading.value" class="admin-empty">Событий нет.</div>
         <table v-else v-stack class="admin-table">
-          <thead><tr><th>Время</th><th>Событие</th><th>Лот</th><th>Подробности</th></tr></thead>
+          <thead><tr><th>Время</th><th>Событие</th><th>Исполнитель</th><th>Лот</th><th>Подробности</th></tr></thead>
           <tbody>
             <tr v-for="e in events" :key="e.id">
               <td class="nowrap">{{ formatDate(e.createdAt) }}</td>
-              <td>{{ e.label }}<span v-if="e.byAdmin" class="muted small"> (админ)</span></td>
+              <td>{{ e.label }}</td>
+              <td>
+                <router-link v-if="e.actorId" :to="'/admin/users/' + e.actorId" class="admin-link">{{ e.actorUsername || '№' + e.actorId }}</router-link>
+                <span v-else class="muted">{{ e.byAdmin ? 'терминал' : 'система' }}</span>
+                <span v-if="e.byAdmin && e.actorId" class="pill good">админ</span>
+              </td>
               <td><router-link v-if="e.lotId" :to="'/admin/lots/' + e.lotId" class="admin-link">№{{ e.lotId }}</router-link></td>
               <td class="details">{{ describeEvent(e) }}</td>
             </tr>
@@ -238,9 +250,10 @@ watch(eventType, () => {
             <td><router-link :to="'/admin/auctions/' + b.lotId" class="admin-link">{{ b.lotTitle }}</router-link></td>
             <td class="num">{{ formatMoney(b.amount) }}</td>
             <td>
-              <span v-if="b.leading" class="pill good">{{ b.lotStatus === 'finished' ? 'Выиграла' : 'Лидирует' }}</span>
+              <span v-if="b.lotStatus === 'cancelled'" class="pill cancelled">Аукцион отменён</span>
+              <span v-else-if="b.leading" class="pill good">{{ b.lotStatus === 'finished' ? 'Выиграла' : 'Лидирует' }}</span>
               <span v-else class="pill neutral">Перебита</span>
-              <span class="muted small"> · {{ b.lotStatus === 'active' ? 'идёт' : b.lotStatus === 'finished' ? 'завершён' : 'отменён' }}</span>
+              <span v-if="b.lotStatus !== 'cancelled'" class="muted small"> · {{ b.lotStatus === 'active' ? 'идёт' : 'завершён' }}</span>
             </td>
           </tr>
         </tbody>
@@ -259,6 +272,16 @@ watch(eventType, () => {
     :busy="action.busy.value"
     :error="action.error.value"
     @confirm="block"
+    @cancel="dialog = ''"
+  />
+  <ConfirmDialog
+    v-if="dialog === 'unblock'"
+    title="Разблокировать пользователя?"
+    hint="Пользователь снова сможет войти, создавать лоты и делать ставки."
+    confirm-text="Разблокировать"
+    :busy="action.busy.value"
+    :error="action.error.value"
+    @confirm="unblock"
     @cancel="dialog = ''"
   />
 </template>

@@ -1,10 +1,12 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import Pagination from '../../components/Pagination.vue'
 import { vStack } from '../../components/admin/stackTable'
+import ReasonDialog from '../../components/admin/ReasonDialog.vue'
+import ConfirmDialog from '../../components/admin/ConfirmDialog.vue'
 import { adminApi } from '../../api'
 import { formatDate } from '../../store'
-import { useLoader } from './useAdmin'
+import { useLoader, useAction } from './useAdmin'
 
 const q = ref('')
 const role = ref('')
@@ -27,6 +29,7 @@ async function load() {
 }
 
 function search() {
+  clearTimeout(timer)
   page.value = 1
   load()
 }
@@ -35,6 +38,35 @@ function goTo(p) {
   page.value = p
   load()
 }
+
+/* --- поиск по мере ввода --- */
+
+let timer
+watch(q, () => {
+  clearTimeout(timer)
+  timer = setTimeout(search, 350)
+})
+onUnmounted(() => clearTimeout(timer))
+
+/* --- блокировка --- */
+
+const dialog = ref(null) // { kind: 'block' | 'unblock', user }
+const action = useAction()
+
+function open(kind, user) {
+  action.error.value = ''
+  dialog.value = { kind, user }
+}
+
+async function run(fn) {
+  if (await action.exec(fn)) {
+    dialog.value = null
+    load()
+  }
+}
+
+const block = (reason) => run(() => adminApi.blockUser(dialog.value.user.id, reason))
+const unblock = () => run(() => adminApi.unblockUser(dialog.value.user.id))
 
 onMounted(load)
 </script>
@@ -73,7 +105,7 @@ onMounted(load)
       <thead>
         <tr>
           <th>ID</th><th>Никнейм</th><th>Имя</th><th>Telegram</th><th>Роль</th><th>Состояние</th>
-          <th class="num">Лотов</th><th class="num">Ставок</th><th>Регистрация</th>
+          <th class="num">Лотов</th><th class="num">Ставок</th><th>Регистрация</th><th>Активность</th><th></th>
         </tr>
       </thead>
       <tbody>
@@ -87,9 +119,38 @@ onMounted(load)
           <td class="num">{{ u.lotsCount }}</td>
           <td class="num">{{ u.bidsCount }}</td>
           <td class="nowrap">{{ formatDate(u.createdAt) }}</td>
+          <td class="nowrap">{{ u.lastActivity ? formatDate(u.lastActivity) : '—' }}</td>
+          <td>
+            <div v-if="u.role !== 'admin'" class="row-actions">
+              <button v-if="u.blocked" class="button small light" type="button" @click="open('unblock', u)">Разблокировать</button>
+              <button v-else class="button small danger" type="button" @click="open('block', u)">Заблокировать</button>
+            </div>
+          </td>
         </tr>
       </tbody>
     </table>
   </div>
   <Pagination :page="page" :total-pages="totalPages" @change="goTo" />
+  <ReasonDialog
+    v-if="dialog?.kind === 'block'"
+    :title="'Заблокировать ' + dialog.user.username + '?'"
+    hint="Пользователь будет разлогинен и не сможет войти или делать ставки, пока вы его не разблокируете."
+    confirm-text="Заблокировать"
+    :required="false"
+    danger
+    :busy="action.busy.value"
+    :error="action.error.value"
+    @confirm="block"
+    @cancel="dialog = null"
+  />
+  <ConfirmDialog
+    v-if="dialog?.kind === 'unblock'"
+    :title="'Разблокировать ' + dialog.user.username + '?'"
+    hint="Пользователь снова сможет войти, создавать лоты и делать ставки."
+    confirm-text="Разблокировать"
+    :busy="action.busy.value"
+    :error="action.error.value"
+    @confirm="unblock"
+    @cancel="dialog = null"
+  />
 </template>
