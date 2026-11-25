@@ -5,7 +5,6 @@ import "encoding/json"
 // AdminUser — пользователь глазами администратора.
 type AdminUser struct {
 	User
-	Email         string `json:"email"` // необязательна: пустая строка, если не задана
 	IsBlocked     bool   `json:"blocked"`
 	BlockedAt     *int64 `json:"blockedAt"`
 	BlockedReason string `json:"blockedReason,omitempty"`
@@ -17,7 +16,7 @@ type AdminUser struct {
 
 // UserFilter — фильтр списка пользователей в админ-панели.
 type UserFilter struct {
-	Q       string // ID, имя, никнейм, почта или Telegram
+	Q       string // ID, имя, никнейм или Telegram
 	Role    string // user | admin | ""
 	Blocked string // "true" | "false" | ""
 }

@@ -25,13 +25,11 @@ import (
 var (
 	usernameRe = regexp.MustCompile(`^[\p{L}\p{N}_.-]{3,32}$`)
 	telegramRe = regexp.MustCompile(`^[A-Za-z0-9_]{5,32}$`)
-	emailRe    = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 )
 
 const (
 	defaultName  = "Администратор"
 	maxNameLen   = 200 // users.name VARCHAR(200)
-	maxEmailLen  = 254 // users.email VARCHAR(254)
 	minPassLen   = 6
 	maxPassBytes = 72 // предел bcrypt
 )
@@ -99,17 +97,6 @@ func ValidateUsername(s string) string {
 	return ""
 }
 
-// ValidateEmail проверяет необязательную почту (пустая допустима).
-func ValidateEmail(s string) string {
-	if s == "" {
-		return ""
-	}
-	if len(s) > maxEmailLen || !emailRe.MatchString(s) {
-		return "Почта указана неверно (пример: name@example.com)"
-	}
-	return ""
-}
-
 // NormalizeTelegram убирает «@» и ссылку t.me/ и проверяет необязательный Telegram
 // (пустой допустим). Возвращает значение для сохранения и текст ошибки.
 func NormalizeTelegram(s string) (string, string) {
@@ -160,7 +147,7 @@ func (c *Console) askUsername() (string, error) {
 //  1. запрашивает username;
 //  2. запрашивает пароль;
 //  3. проверяет, существует ли пользователь с таким username;
-//  4. нет — запрашивает имя, почту и Telegram (необязательно) и создаёт пользователя с ролью admin;
+//  4. нет — запрашивает имя и Telegram (необязательно) и создаёт пользователя с ролью admin;
 //  5. есть — меняет его роль на admin (остальные данные не трогает);
 //  6. сохраняет хеш пароля в PostgreSQL.
 func Create(ctx context.Context, q *db.Queries, c *Console) error {
@@ -195,10 +182,6 @@ func Create(ctx context.Context, q *db.Queries, c *Console) error {
 		fmt.Fprintln(c.Out, "Остальные поля необязательны: Enter — пропустить.")
 		profile.Name = c.readOptional("Имя [" + defaultName + "]: ")
 		if msg := validateName(profile.Name); msg != "" {
-			return errors.New(msg)
-		}
-		profile.Email = c.readOptional("Почта: ")
-		if msg := ValidateEmail(profile.Email); msg != "" {
 			return errors.New(msg)
 		}
 		var msg string

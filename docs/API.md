@@ -177,17 +177,17 @@ durationSec, startsAt|null, hidden?, moderationReason? }`
 
 | Команда | Что делает |
 |---|---|
-| `make admin-create` | Спрашивает `username` и пароль (повтор пароля — в интерактивном режиме). Нет такого пользователя — дополнительно спрашивает имя, почту и Telegram (необязательно, Enter — пропустить) и создаёт пользователя с ролью `admin`; есть — меняет роль на `admin`, остальные данные не трогает. Хеш пароля (bcrypt) сохраняется в PostgreSQL в обоих случаях; у существующего пользователя сессии отзываются, блокировка снимается |
+| `make admin-create` | Спрашивает `username` и пароль (повтор пароля — в интерактивном режиме). Нет такого пользователя — дополнительно спрашивает имя и Telegram (необязательно, Enter — пропустить) и создаёт пользователя с ролью `admin`; есть — меняет роль на `admin`, остальные данные не трогает. Хеш пароля (bcrypt) сохраняется в PostgreSQL в обоих случаях; у существующего пользователя сессии отзываются, блокировка снимается |
 | `make admin-delete` | Откат (спрашивает `username` и подтверждение). Аккаунт, который создала `admin-create` и у которого нет лотов и ставок, удаляется; иначе снимается только роль `admin` |
 
 Вход — на общей странице входа по `username`. Правила `username` и Telegram те же, что при регистрации.
-Почта необязательна и нигде, кроме админ-панели (карточка пользователя и поиск), не используется. Для запуска без Docker:
+Для запуска без Docker:
 `make admin-create-local`.
 
 ### Пользователи
 | Метод | Путь | Описание |
 |---|---|---|
-| GET | `/admin/users` | Список и поиск. Query: `q` (ID, имя, username, почта или Telegram), `role`, `blocked` (`true`/`false`) → `{ users: [AdminUser], … }` |
+| GET | `/admin/users` | Список и поиск. Query: `q` (ID, имя, username или Telegram), `role`, `blocked` (`true`/`false`) → `{ users: [AdminUser], … }` |
 | GET | `/admin/users/{id}` | `{ user: AdminUser, stats: UserStats }` — подробная информация |
 | GET | `/admin/users/{id}/activity` | История активности (события, где пользователь — субъект или исполнитель). Query: `type`, `from`, `to` → `{ events, … }` |
 | GET | `/admin/users/{id}/lots` | Все лоты пользователя любых статусов (`status` — фильтр) → `{ lots, … }` |
@@ -195,7 +195,7 @@ durationSec, startsAt|null, hidden?, moderationReason? }`
 | POST | `/admin/users/{id}/block` | `{ reason? }` → `AdminUser`; отзывает все сессии. Администратора и себя заблокировать нельзя (409) |
 | POST | `/admin/users/{id}/unblock` | → `AdminUser` |
 
-`AdminUser = { id, username, name, email, telegram, dormId, createdAt, role, blocked, blockedAt, blockedReason?, blockedBy?,
+`AdminUser = { id, username, name, telegram, dormId, createdAt, role, blocked, blockedAt, blockedReason?, blockedBy?,
 lotsCount, bidsCount, lastActivity }`.
 
 ### Модерация лотов

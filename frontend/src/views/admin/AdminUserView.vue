@@ -162,7 +162,6 @@ watch(eventType, () => {
       <dl class="kv">
         <dt>ID</dt><dd>{{ user.id }}</dd>
         <dt>Имя</dt><dd>{{ user.name }}</dd>
-        <dt>Почта</dt><dd>{{ user.email || '—' }}</dd>
         <dt>Telegram</dt><dd>{{ user.telegram ? '@' + user.telegram : '—' }}</dd>
         <dt>Общежитие</dt><dd>{{ user.dormId ? getDormLabel(user.dormId) : '—' }}</dd>
         <dt>Зарегистрирован</dt><dd>{{ formatDate(user.createdAt) }}</dd>

@@ -17,7 +17,7 @@ func (q *Queries) UserAccess(ctx context.Context, id int64) (role string, blocke
 	return role, blocked, mapErr(err)
 }
 
-const adminUserSelect = `SELECT u.id, u.username, u.name, COALESCE(u.email, ''), COALESCE(u.telegram, ''), COALESCE(u.dorm_id, 0), u.created_at,
+const adminUserSelect = `SELECT u.id, u.username, u.name, COALESCE(u.telegram, ''), COALESCE(u.dorm_id, 0), u.created_at,
 	u.role, u.blocked_at, COALESCE(u.blocked_reason, ''), u.blocked_by,
 	(SELECT COUNT(*) FROM lots WHERE author_id = u.id),
 	(SELECT COUNT(*) FROM bids WHERE user_id = u.id),
@@ -29,7 +29,7 @@ func scanAdminUser(row interface{ Scan(...any) error }) (model.AdminUser, error)
 	var created time.Time
 	var blockedAt, last sql.NullTime
 	var blockedBy sql.NullInt64
-	err := row.Scan(&u.ID, &u.Username, &u.Name, &u.Email, &u.Telegram, &u.DormID, &created,
+	err := row.Scan(&u.ID, &u.Username, &u.Name, &u.Telegram, &u.DormID, &created,
 		&u.Role, &blockedAt, &u.BlockedReason, &blockedBy, &u.LotsCount, &u.BidsCount, &last)
 	if err != nil {
 		return u, err
@@ -62,7 +62,7 @@ func userWhere(f model.UserFilter) (string, []any) {
 	if q := strings.TrimSpace(f.Q); q != "" {
 		r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 		p := next("%" + r.Replace(q) + "%")
-		cond := fmt.Sprintf("(u.username ILIKE %s OR u.name ILIKE %s OR u.email ILIKE %s OR u.telegram ILIKE %s", p, p, p, p)
+		cond := fmt.Sprintf("(u.username ILIKE %s OR u.name ILIKE %s OR u.telegram ILIKE %s", p, p, p)
 		if id, err := strconv.ParseInt(q, 10, 64); err == nil && id > 0 {
 			cond += " OR u.id = " + next(id)
 		}

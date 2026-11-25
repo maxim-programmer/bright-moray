@@ -3,7 +3,7 @@ import { ref, watch, onUnmounted } from 'vue'
 import { adminApi } from '../../api'
 import { handleApiError } from '../../store'
 
-// Выбор пользователя: поиск по имени, никнейму, почте, Telegram или ID.
+// Выбор пользователя: поиск по имени, никнейму, Telegram или ID.
 const props = defineProps({
   modelValue: { type: [String, Number], default: '' }, // ID или ''
   label: { type: String, default: 'Пользователь' },

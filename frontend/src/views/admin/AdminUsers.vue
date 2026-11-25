@@ -74,8 +74,8 @@ onMounted(load)
 <template>
   <form class="admin-bar" @submit.prevent="search">
     <label class="field grow">
-      Поиск по ID, имени, username, почте или Telegram
-      <input v-model="q" type="search" placeholder="Например: 15, Иван, ivan_k, ivan@mail.ru" />
+      Поиск по ID, имени, username или Telegram
+      <input v-model="q" type="search" placeholder="Например: 15, Иван, ivan_k" />
     </label>
     <label class="field">
       Роль

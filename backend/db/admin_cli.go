@@ -27,7 +27,6 @@ type CLIResult struct {
 // (имя заменяется значением по умолчанию).
 type CLIProfile struct {
 	Name     string
-	Email    string
 	Telegram string // без «@»
 }
 
@@ -64,15 +63,6 @@ func (q *Queries) CLIGrantAdmin(ctx context.Context, username, passwordHash stri
 			name = "Администратор"
 		}
 		var taken bool
-		if profile.Email != "" {
-			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE lower(email) = lower($1))`,
-				profile.Email).Scan(&taken); err != nil {
-				return res, err
-			}
-			if taken {
-				return res, model.Errf(409, "conflict", "Эта почта уже занята другим пользователем")
-			}
-		}
 		if profile.Telegram != "" {
 			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE lower(telegram) = lower($1))`,
 				profile.Telegram).Scan(&taken); err != nil {
@@ -83,14 +73,14 @@ func (q *Queries) CLIGrantAdmin(ctx context.Context, username, passwordHash stri
 			}
 		}
 		if err := tx.QueryRowContext(ctx,
-			`INSERT INTO users (username, password, name, email, telegram, role) VALUES ($1, $2, $3, $4, $5, 'admin') RETURNING id`,
-			username, passwordHash, name, nullString(profile.Email), nullString(profile.Telegram)).Scan(&id); err != nil {
+			`INSERT INTO users (username, password, name, telegram, role) VALUES ($1, $2, $3, $4, 'admin') RETURNING id`,
+			username, passwordHash, name, nullString(profile.Telegram)).Scan(&id); err != nil {
 			return res, mapErr(err)
 		}
 		res = CLIResult{Action: CLICreated, UserID: id, Username: username}
 		if err := insertEvent(ctx, tx, EventInput{
 			Type: model.EvAdminCLICreated, UserID: id, ByAdmin: true,
-			Details: map[string]any{"username": username, "name": name, "email": profile.Email, "telegram": profile.Telegram},
+			Details: map[string]any{"username": username, "name": name, "telegram": profile.Telegram},
 		}); err != nil {
 			return res, err
 		}
