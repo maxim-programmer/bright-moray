@@ -160,7 +160,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if user.Blocked { // пароль верный, но войти заблокированному нельзя
-		writeError(w, http.StatusForbidden, "account_blocked", msgBlocked)
+		writeError(w, http.StatusForbidden, "account_blocked", h.blockedMessage(r.Context(), user.ID))
 		return
 	}
 

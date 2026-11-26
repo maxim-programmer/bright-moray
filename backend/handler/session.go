@@ -142,7 +142,7 @@ func (h *Handler) authed(fn func(w http.ResponseWriter, r *http.Request, uid int
 				return
 			case blocked:
 				h.clearAuthCookies(w)
-				writeError(w, http.StatusForbidden, "account_blocked", msgBlocked)
+				writeError(w, http.StatusForbidden, "account_blocked", h.blockedMessage(r.Context(), uid))
 				return
 			}
 		}

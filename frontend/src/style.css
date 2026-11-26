@@ -406,6 +406,12 @@ textarea {
   font-weight: 600;
 }
 
+/* Текст с переносами строк от сервера (например, причина блокировки) */
+.multiline {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 /* Страница создания лота */
 .container > h1:first-child {
   text-align: center;

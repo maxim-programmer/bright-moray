@@ -32,7 +32,7 @@ async function submit() {
 <template>
   <form class="form narrow" @submit.prevent="submit">
     <h1>Вход</h1>
-    <div v-if="state.authNotice" class="error">{{ state.authNotice }}</div>
+    <div v-if="state.authNotice" class="error multiline">{{ state.authNotice }}</div>
     <p v-else-if="route.query.redirect" class="muted">Войдите, чтобы продолжить</p>
     <label class="field">
       Никнейм
@@ -42,7 +42,7 @@ async function submit() {
       Пароль
       <input v-model="password" type="password" autocomplete="current-password" />
     </label>
-    <div v-if="error" class="error">{{ error }}</div>
+    <div v-if="error" class="error multiline">{{ error }}</div>
     <button class="button" type="submit" :disabled="busy">Войти</button>
     <div class="muted">
       Нет аккаунта? <router-link to="/register"><b>Зарегистрироваться</b></router-link>

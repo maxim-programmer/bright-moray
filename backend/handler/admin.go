@@ -17,8 +17,6 @@ import (
 )
 
 const (
-	msgBlocked = "Ваш аккаунт заблокирован администратором"
-
 	adminPageSize    = 20
 	adminMaxPageSize = 100
 	maxReasonLen     = 1000
@@ -58,7 +56,7 @@ func (h *Handler) adminOnly(fn func(w http.ResponseWriter, r *http.Request, admi
 			return
 		case blocked:
 			h.clearAuthCookies(w)
-			writeError(w, http.StatusForbidden, "account_blocked", msgBlocked)
+			writeError(w, http.StatusForbidden, "account_blocked", h.blockedMessage(r.Context(), uid))
 			return
 		case role != model.RoleAdmin:
 			writeError(w, http.StatusForbidden, "forbidden", "Недостаточно прав")
@@ -66,6 +64,17 @@ func (h *Handler) adminOnly(fn func(w http.ResponseWriter, r *http.Request, admi
 		}
 		fn(w, r, uid)
 	}
+}
+
+// blockedMessage — текст ответа account_blocked: общая фраза и причина блокировки, если она указана.
+// Сбой чтения причины не должен скрывать саму блокировку, поэтому тогда отвечаем без причины.
+func (h *Handler) blockedMessage(ctx context.Context, uid int64) string {
+	reason, err := h.q.BlockedReason(ctx, uid)
+	if err != nil {
+		logging.FromContext(ctx, logging.ComponentHandler).
+			Warn("failed to load block reason", zap.Int64("user_id", uid), zap.Error(err))
+	}
+	return model.BlockedMessage(reason)
 }
 
 /* ---------- журнал ---------- */

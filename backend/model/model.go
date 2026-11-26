@@ -133,3 +133,13 @@ func (e *APIError) Error() string { return e.Message }
 func Errf(status int, code, format string, a ...any) *APIError {
 	return &APIError{Status: status, Code: code, Message: fmt.Sprintf(format, a...)}
 }
+
+// BlockedMessage — текст ошибки account_blocked. Причина блокировки, если администратор её указал,
+// идёт второй строкой.
+func BlockedMessage(reason string) string {
+	const base = "Ваш аккаунт заблокирован администратором"
+	if reason == "" {
+		return base
+	}
+	return base + ".\nПричина: " + reason
+}

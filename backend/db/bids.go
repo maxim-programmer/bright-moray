@@ -126,12 +126,15 @@ func (q *Queries) PlaceBid(ctx context.Context, lotID, userID int64, amount int,
 	// Заблокированный пользователь не может делать ставки, даже если его access-токен ещё жив
 	// или он подключён по WebSocket. Несуществующего пользователя отвергнет внешний ключ ниже.
 	var blocked bool
-	switch err := tx.QueryRowContext(ctx, `SELECT blocked_at IS NOT NULL FROM users WHERE id = $1`, userID).Scan(&blocked); {
+	var blockedReason string
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT blocked_at IS NOT NULL, COALESCE(blocked_reason, '') FROM users WHERE id = $1`, userID).
+		Scan(&blocked, &blockedReason); {
 	case err == sql.ErrNoRows:
 	case err != nil:
 		return res, err
 	case blocked:
-		return res, model.Errf(403, "account_blocked", "Ваш аккаунт заблокирован")
+		return res, model.Errf(403, "account_blocked", "%s", model.BlockedMessage(blockedReason))
 	}
 	if authorID == userID {
 		return res, model.Errf(403, "own_lot", "Нельзя делать ставку на свой лот")

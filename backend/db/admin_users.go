@@ -17,6 +17,15 @@ func (q *Queries) UserAccess(ctx context.Context, id int64) (role string, blocke
 	return role, blocked, mapErr(err)
 }
 
+// BlockedReason возвращает причину блокировки; пустая строка — причина не указана
+// (или пользователь не заблокирован). ErrNotFound — пользователя нет.
+func (q *Queries) BlockedReason(ctx context.Context, id int64) (string, error) {
+	var reason string
+	err := q.db.QueryRowContext(ctx,
+		`SELECT COALESCE(blocked_reason, '') FROM users WHERE id = $1`, id).Scan(&reason)
+	return reason, mapErr(err)
+}
+
 const adminUserSelect = `SELECT u.id, u.username, u.name, COALESCE(u.telegram, ''), COALESCE(u.dorm_id, 0), u.created_at,
 	u.role, u.blocked_at, COALESCE(u.blocked_reason, ''), u.blocked_by,
 	(SELECT COUNT(*) FROM lots WHERE author_id = u.id),

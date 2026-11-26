@@ -31,7 +31,6 @@ const BID_ERRORS = {
   already_leading: 'Ваша ставка и так лидирует.',
   lot_closed: 'Аукцион уже завершён, ставки не принимаются.',
   own_lot: 'Нельзя ставить на собственный лот.',
-  account_blocked: 'Ваш аккаунт заблокирован администратором.',
   validation: 'Введите сумму ставки целым числом.',
   rate_limited: 'Слишком много запросов, попробуйте через пару секунд.',
   network: 'Нет связи с сервером, ставка не отправлена.'
@@ -249,7 +248,8 @@ watch(awaitingResult, (waiting) => {
 /* --- Действия --- */
 
 function bidErrorText(e) {
-  if (e?.code === 'unauthorized') return handleApiError(e)
+  // для блокировки текст сервера содержит причину, а handleApiError покажет её на странице входа
+  if (e?.code === 'unauthorized' || e?.code === 'account_blocked') return handleApiError(e)
   return BID_ERRORS[e?.code] || handleApiError(e)
 }
 
